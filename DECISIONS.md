@@ -165,3 +165,37 @@ made **during the build**.
 - **Evidence recorded:** storefront serving 60s after apply; kill-task demo: ALB ejected
   the dead target in seconds, survivor carried traffic, self-heal to 2/2 in ~40s,
   availability 100% throughout (every 10s probe returned 200).
+
+---
+
+## Phase 2 — decisions made ahead of the build
+
+### D10 — Secrets: SSM Parameter Store SecureString, not Secrets Manager
+- **Decided:** application secrets (first one: the RDS MySQL password — the middle
+  segment of catalogue's DSN `catalogue_user:PASSWORD@tcp(<rds-endpoint>:3306)/socksdb`)
+  live in **AWS Systems Manager Parameter Store** as **SecureString** parameters
+  (standard tier), injected into containers via ECS `valueFrom`.
+- **What SSM is:** Systems Manager is an ops toolbox; the piece used here is Parameter
+  Store — a key-value store for config and secrets. `SecureString` = encrypted at rest
+  with KMS. Mapping: Azure Key Vault's role. Interview-grade contrast: **Kubernetes
+  Secrets are base64-encoded, not encrypted by default — SSM SecureString is actually
+  encrypted.**
+- **Alternatives:** (a) AWS Secrets Manager — adds native rotation, cross-region
+  replication, and RDS integration at **$0.40/secret/month**; the production
+  recommendation when rotation is required (goes in docs). (b) Values in tfvars/env —
+  violates the no-secrets-in-code agreement outright.
+- **Why:** standard-tier Parameter Store is **free**, natively integrated with ECS
+  secrets injection, and encrypted at rest — the full requirement at zero cost for a
+  demo with no rotation requirement.
+- **The mechanism (Phase 2 will implement exactly this):** Terraform generates the
+  password → stores it as an SSM SecureString → catalogue's instantiation passes
+  `secrets = { <ENV_NAME> = <parameter ARN> }` → the ecs-service module renders it into
+  `valueFrom` in the task definition → at each task launch the **execution role** (not
+  the task role — L14) calls SSM, decrypts via KMS, and injects the value as a plain
+  env var inside the container. **Plaintext never appears in the task definition, the
+  console, or git — the task def carries only the ARN.**
+- **Honest caveat (say it before a reviewer does):** a Terraform-generated password
+  also lives in the **Terraform state file** in S3 — encrypted at rest (AES256),
+  versioned, public-access-blocked, single-user account. Known, accepted, documented
+  trade-off; the stricter alternative (create the secret out-of-band and only reference
+  its ARN) is noted for production.

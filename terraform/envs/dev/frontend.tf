@@ -3,6 +3,18 @@
 module "front_end" {
   source = "../../modules/ecs-service"
 
+  # Service Connect ordering (D12): a client's endpoint list is a SNAPSHOT taken
+  # at DEPLOYMENT creation — servers registered later are invisible until the
+  # client redeploys. On fresh builds, front-end must therefore be created LAST,
+  # after every service it calls. (AWS documents the same rule for CFN dependsOn.)
+  depends_on = [
+    module.catalogue,
+    module.user,
+    module.carts,
+    module.orders,
+    module.session_db,
+  ]
+
   name          = "front-end"
   cluster_id    = module.ecs_cluster.cluster_id
   namespace_arn = module.ecs_cluster.namespace_arn
@@ -16,6 +28,10 @@ module "front_end" {
   cpu           = 256
   memory        = 512
   desired_count = 2 # two tasks across two AZs — the HA baseline
+
+  environment = {
+    SESSION_REDIS = "true" # D4: sessions live in session-db so both tasks share them
+  }
 
   subnet_ids         = module.network.private_subnet_ids
   security_group_ids = [aws_security_group.frontend.id]

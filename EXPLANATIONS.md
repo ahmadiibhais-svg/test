@@ -20,6 +20,8 @@ New lessons get appended as the project advances.
 - [L13 — Security groups + ALB anatomy](#l13)
 - [L14 — ecs-service: the two roles, the pod-spec mapping, the circuit breaker](#l14)
 - [L15 — Subnetting, the local route, and the full-picture diagram](#l15)
+- [L16 — The deployment watch playbook (CLI + console, in dependency order)](#l16)
+- [L17 — The error chronicle: every failure, cause, fix, and lesson](#l17)
 - [Defense question bank](#defense-question-bank)
 
 ---
@@ -700,6 +702,161 @@ ECR mirror fixes that cost.
 
 ---
 
+<a name="l16"></a>
+## L16 — The deployment watch playbook (CLI + console, in dependency order)
+
+The order below IS Terraform's dependency graph — watch things in the order they can
+possibly become healthy. Console paths assume region us-east-1.
+
+**0. The gate (before anything):** `terraform plan -out=plan.tfplan` → read the counts
+(add/change/destroy), flag money and destruction. Console: none — this step IS the
+review. Apply executes exactly the frozen file.
+
+**1. Apply stream itself:** the `Creation complete` lines print in dependency order —
+the first health signal is Terraform finishing without errors.
+
+**2. Network (VPC/NAT):**
+- CLI: `aws ec2 describe-nat-gateways --filter Name=state,Values=available`
+- Console: VPC → NAT gateways (state **Available**); Route tables → the private table
+  shows `0.0.0.0/0 → nat-…` and the S3 prefix → vpce-…
+
+**3. ALB:**
+- CLI: `aws elbv2 describe-load-balancers --query "LoadBalancers[].State.Code"` → `active`
+- Console: EC2 → Load balancers → State **Active** (provisioning takes ~3 min)
+
+**4. RDS:**
+- CLI: `aws rds describe-db-instances --query "DBInstances[].DBInstanceStatus"` →
+  `creating` → `available` (~5–8 min for t4g.micro)
+- Console: RDS → Databases → Status column
+
+**5. ECS services (the main watch):**
+- CLI (≤10 services per call — the API cap!):
+  `aws ecs describe-services --cluster sockshop --services … --query
+  "services[].{name:serviceName,run:runningCount,des:desiredCount,
+  rollout:deployments[0].rolloutState}"` → want run==des and rollout **COMPLETED**,
+  and exactly ONE deployment (two = a roll still in progress).
+  Events feed: `--query "services[0].events[0:5].message"` — ECS narrates itself.
+- Console: ECS → Clusters → sockshop → each service → **Deployments** tab (rollout
+  state, failed-task count = circuit-breaker fuel) + **Events** tab (the narrative).
+
+**6. Tasks (inside a service):**
+- CLI: `aws ecs list-tasks --cluster sockshop --service-name X` →
+  `aws ecs describe-tasks … --query "tasks[].{status:lastStatus,started:startedAt,
+  containers:containers[].{name:name,status:lastStatus}}"` — look for RUNNING, a
+  recent startedAt, and the `ecs-service-connect-*` sidecar RUNNING beside the app.
+- Console: service → Tasks tab → click a task: containers, ENI private IP, stopped
+  reason (for corpses).
+
+**7. Task logs:**
+- CLI: `aws logs get-log-events --log-group-name /ecs/sockshop/<svc>
+  --log-stream-name "<svc>/<svc>/<task-id>"` (Git Bash: prefix `MSYS_NO_PATHCONV=1`!)
+- Console: CloudWatch → Log groups → /ecs/sockshop/<svc> — or ECS task → Logs tab.
+
+**8. ALB target health (front-end only):**
+- CLI: `aws elbv2 describe-target-health --target-group-arn …` → `healthy` per AZ
+- Console: EC2 → Target groups → sockshop-front-end-tg → Targets tab.
+
+**9. Service Connect registry:**
+- CLI: `aws servicediscovery list-services` / `list-instances --service-id …`
+- Console: **AWS Cloud Map** → namespaces → sockshop → each service → instances.
+
+**10. End to end:** `curl http://<alb-dns>/` (storefront) and `/catalogue` (the full
+chain: ALB → front-end → SC → catalogue → RDS).
+
+**The debugging ladder when something's wrong (in order):**
+task stopped-reason → its CloudWatch logs → can it resolve its dependency
+(SC: **compare the CLIENT's deployment time vs the SERVER's registration time** — L17
+case 9) → SG path → env/secret values.
+
+---
+
+<a name="l17"></a>
+## L17 — The error chronicle: every failure, cause, fix, and lesson
+
+Chronological, from the project's first hour to the full app. Every one is defense
+material — interviewers trust people who can narrate their failures precisely.
+
+**1. AWS CLI "not found" after install.**
+Cause: the running shell inherited its PATH before the install. Fix: fresh terminal
+(and my tooling invoked the exe by full path). Lesson: tools inherit environment at
+START; installs don't retrofit running sessions.
+
+**2. Access key pasted into chat.**
+Cause: human reflex. Fix: immediate deactivate → delete → new key → `aws configure`,
+secret never left the terminal again. Lesson: **exposure = rotation, no exceptions**;
+chat and logs are storage.
+
+**3. Push to main blocked by the assistant's own permission gate.**
+Cause: "here's the URL" ≠ explicit authorization for a default-branch push. Fix: Ahmad
+pushed himself / explicit approval. Lesson: guardrails bite their owners too — good.
+
+**4. First-ever ECS CreateCluster: "Service Linked Role is not ready."**
+Cause: the account's FIRST ECS call triggers creation of AWSServiceRoleForECS and can
+race it. Fix: retry once the role existed; the namespace that had already succeeded was
+preserved in state — partial-failure recovery working as designed. Lesson: fresh
+accounts have first-touch races; **read the error — it names its cause** (it was not a
+free-plan restriction).
+
+**5. Security-group description rejected at plan time.**
+Cause: SG rule descriptions have a restricted charset (no `->`, no apostrophes).
+Fix: reworded. Lesson: `terraform validate` checks structure; **providers enforce
+their own deeper validation at plan** — two different gates.
+
+**6. RDS parameter group: two-layer failure.**
+Layer 1 (caught by adversarial review BEFORE apply): `default_authentication_plugin`
+is a STATIC parameter → needs `apply_method = "pending-reboot"` or the apply fails.
+Layer 2 (caught by AWS at apply): on current RDS MySQL 8.0 engines the parameter is
+**immutable entirely** ("cannot be modified") — reality had moved past even the
+reviewers' knowledge. Fix: delete the parameter group; align the USER instead —
+the seed task's modern mysql:8 client runs `ALTER USER … IDENTIFIED WITH
+mysql_native_password` before old-driver catalogue ever connects. Lessons:
+**the apply error is the only documentation that never goes stale**; when the server
+won't bend, fix at the user level; compatibility work belongs where the modern
+tooling is.
+
+**7. dump.sql landmines (found by reading it BEFORE running it).**
+`GRANT ALL … TO 'catalogue_user'` — MySQL 8 no longer auto-creates users on GRANT and
+RDS masters have restricted grant rights → stripped the line (master IS that user).
+No CREATE DATABASE inside → satisfied by RDS's `db_name = socksdb`. Table name
+verified = `sock` (10 rows). Lesson: never pipe a seed file you haven't read into a
+database.
+
+**8. Git Bash mangled `/ecs/sockshop/seed` into a Windows path.**
+Cause: MSYS auto-converts leading-slash args. Fix: `MSYS_NO_PATHCONV=1`. Lesson:
+Windows shell toolchains rewrite arguments; when an AWS error shows a mutated
+parameter, suspect the shell first.
+
+**9. THE BIG ONE — Service Connect ENOTFOUND despite everything green.**
+Symptom: all 13 services steady, Cloud Map fully registered, SC sidecars running —
+and front-end eternally `getaddrinfo ENOTFOUND catalogue`.
+Three-layer root cause, peeled in order:
+- (a) **Alias naming:** omitted `client_alias.dns_name` defaults to
+  `discoveryName.namespace` (`catalogue.sockshop`) — the images dial bare `catalogue`.
+  Fix: explicit `dns_name = <name>`. Necessary — but not sufficient.
+- (b) **Snapshot semantics (the real killer):** a client's endpoint list is a snapshot
+  taken **when its DEPLOYMENT is created** — replacement tasks inherit the stale
+  snapshot forever ("replacement tasks continue to behave the same as they did after
+  the most recent deployment" — AWS docs). Our clients' deployments were created in
+  the same wave as the servers' alias fix → froze the old table. Fix:
+  `--force-new-deployment` on the six consumer services AFTER the namespace settled.
+- (c) **Permanence:** `depends_on` on client modules (front-end last, orders after its
+  four peers, etc.) so fresh builds create servers before clients — AWS documents the
+  identical rule for CloudFormation `dependsOn`.
+How it was cracked: a disposable SC-enabled **spy task** dumping /etc/hosts to
+CloudWatch (aliases present + full HTTP path working, including catalogue→RDS), then
+an **impersonation task running the real front-end image** (Node v4.8.0 resolved and
+connected perfectly — the runtime was innocent), plus parallel research that produced
+the snapshot quote. Lessons: **a fresh task is NOT a fresh deployment**; when config
+is provably right and behavior is provably wrong, get ground truth from INSIDE;
+distinguish component bugs from orchestration bugs — this was pure orchestration.
+
+**10. Monitoring self-own: describe-services silently caps at 10 services.**
+My 13-service polling call errored every cycle and the watcher reported nothing.
+Fix: batch calls. Lesson: know the API limits your monitoring depends on — and when a
+monitor says nothing at all, suspect the monitor.
+
+---
+
 ## Defense question bank
 
 1. Why does bootstrap keep local state while the main root uses S3 — and what breaks if
@@ -728,3 +885,12 @@ ECR mirror fixes that cost.
 17. Walk me through what the deployment circuit breaker does when a bad image ships. (L14)
 18. Why is the task role deliberately empty, and where will the Phase-2 secret permission
     land instead? (L14)
+19. All 13 services are green, Cloud Map shows every instance, sidecars run — and a
+    client still gets ENOTFOUND. Walk the three-layer diagnosis. (L17 case 9 — the star)
+20. Why did killing and replacing a front-end task NOT fix its stale service list, when
+    a --force-new-deployment did? (L17: fresh task ≠ fresh deployment)
+21. Your seed task runs ALTER USER before the import — why, and why THERE instead of a
+    server parameter? (L17 case 6)
+22. What single command sequence tells you whether a Service Connect resolution failure
+    is a snapshot-staleness problem? (compare client deployment createdAt vs server
+    registration; L16 ladder)

@@ -199,3 +199,37 @@ made **during the build**.
   versioned, public-access-blocked, single-user account. Known, accepted, documented
   trade-off; the stricter alternative (create the secret out-of-band and only reference
   its ARN) is noted for production.
+
+### D12 — Service Connect: explicit bare dns_name + server-before-client ordering
+- **Decided:** (a) every service's `client_alias` sets **`dns_name = <service name>` explicitly**
+  — AWS defaults an omitted dnsName to `discoveryName.namespace` (e.g. `catalogue.sockshop`),
+  which the images' baked-in bare hostnames can never match. (b) **Deploy order is code:**
+  client modules carry `depends_on` on every service they call (front-end last; orders after
+  its four peers; carts/user/shipping/queue-master after their data dependencies), because a
+  Service Connect client's endpoint list is a **SNAPSHOT taken when its DEPLOYMENT is created**
+  — AWS: "replacement tasks continue to behave the same as they did after the most recent
+  deployment… you must redeploy existing services before the applications can resolve new
+  endpoints." A *fresh task* is NOT a *fresh snapshot*.
+- **How it was diagnosed (worth retelling in the defense):** all-green services + registered
+  Cloud Map instances + running sidecars, yet ENOTFOUND. Ground truth came from a temporary
+  SC-enabled "spy" task dumping /etc/hosts to CloudWatch (13 bare aliases present, full HTTP
+  path working — including catalogue→RDS), then an impersonation task running the REAL
+  front-end image (Node v4.8.0 resolved and connected perfectly — the 2017 runtime was
+  innocent). Parallel doc research pinned the snapshot semantics. Root cause: orchestration
+  ordering, not any component.
+- **Operational rule derived:** when a Service Connect name won't resolve, compare the CLIENT
+  service's last deployment time against the SERVER's registration time; if the client's
+  deployment is older — `--force-new-deployment` the client. Added to the debugging ladder.
+
+### D11 — SG chain completed; one amendment to the locked chain (session-db 6379)
+- **Decided:** backend-sg (80 from frontend-sg + 80 from SELF — the self-reference
+  covers every backend→backend pair: orders→carts/user/payment/shipping — in one
+  membership-based rule), data-sg (27017 + 5672 from backend-sg), rds-sg (3306 from
+  backend-sg). **Amendment:** data-sg additionally allows **6379 from frontend-sg** —
+  session-db (Redis, accepted in D4) sits in the data tier but its only client is
+  front-end, which the original locked chain (written pre-D4) didn't anticipate.
+- **Why flagged:** CLAUDE.md marks the SG chain as locked; this is the D4 decision's
+  mechanical consequence, surfaced explicitly rather than silently added. Everything
+  else matches the locked chain exactly. Ports are exact, sources are SG-identities
+  (never CIDRs inside the VPC), and the ONLY 0.0.0.0/0 ingress in the system remains
+  alb-sg:80.

@@ -30,6 +30,26 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# Phase-2 extension: services that inject secrets need their EXECUTION role
+# (injection is a platform job — L14/D10) allowed to read EXACTLY those
+# parameters, nothing wider. count 0/1 = the conditional-resource pattern:
+# services without secrets don't even get the policy object.
+resource "aws_iam_role_policy" "secrets_access" {
+  count = length(var.secrets) > 0 ? 1 : 0
+
+  name = "read-injected-secrets"
+  role = aws_iam_role.execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "ssm:GetParameters"
+      Resource = values(var.secrets)
+    }]
+  })
+}
+
 # TASK role: assumed by the APPLICATION CODE for AWS API calls at runtime.
 # K8s analog: the pod's ServiceAccount. Deliberately EMPTY — our apps make no
 # AWS calls, so their runtime identity has no permissions (least privilege).
@@ -59,31 +79,37 @@ resource "aws_ecs_task_definition" "this" {
 
   # container_definitions is historically a JSON-string field: jsonencode turns
   # clean HCL into that JSON. The for-expressions reshape our friendly maps into
-  # the list-of-objects the ECS API demands.
+  # the list-of-objects the ECS API demands. merge() + the null-to-{} ternary
+  # includes entryPoint/command in the JSON ONLY when a caller sets them
+  # (catalogue's sh-wrapper); everyone else keeps the image defaults untouched.
   container_definitions = jsonencode([
-    {
-      name      = var.name
-      image     = var.image
-      essential = true
+    merge(
+      {
+        name      = var.name
+        image     = var.image
+        essential = true
 
-      portMappings = [{
-        name          = var.name # port name — Service Connect points at this
-        containerPort = var.container_port
-        protocol      = "tcp"
-      }]
+        portMappings = [{
+          name          = var.name # port name — Service Connect points at this
+          containerPort = var.container_port
+          protocol      = "tcp"
+        }]
 
-      environment = [for k, v in var.environment : { name = k, value = v }]
-      secrets     = [for k, v in var.secrets : { name = k, valueFrom = v }]
+        environment = [for k, v in var.environment : { name = k, value = v }]
+        secrets     = [for k, v in var.secrets : { name = k, valueFrom = v }]
 
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.this.name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = var.name
+        logConfiguration = {
+          logDriver = "awslogs"
+          options = {
+            awslogs-group         = aws_cloudwatch_log_group.this.name
+            awslogs-region        = var.aws_region
+            awslogs-stream-prefix = var.name
+          }
         }
-      }
-    }
+      },
+      var.container_entrypoint == null ? {} : { entryPoint = var.container_entrypoint },
+      var.container_command == null ? {} : { command = var.container_command },
+    )
   ])
 }
 
@@ -117,7 +143,12 @@ resource "aws_ecs_service" "this" {
       discovery_name = var.name
 
       client_alias {
-        port = var.container_port # the port callers dial (images call bare hostnames)
+        # dns_name MUST be explicit: AWS defaults an omitted dnsName to
+        # "discoveryName.namespace" (catalogue.sockshop) — but the images dial
+        # BARE hostnames (catalogue). Cost of the default: ENOTFOUND everywhere.
+        # (Debugging story of 2026-07-04, D12.)
+        dns_name = var.name
+        port     = var.container_port # the port callers dial
       }
     }
   }

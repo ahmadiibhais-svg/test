@@ -85,6 +85,22 @@ variable "target_group_arn" {
   default     = null
 }
 
+variable "container_entrypoint" {
+  description = <<-EOT
+    Optional entryPoint override. null = image default (12 of 13 services).
+    Used by catalogue: ["sh","-c"] wrapper that turns the injected DSN env var
+    into the -DSN flag its binary requires (review-workflow catch, SERVICES.md).
+  EOT
+  type        = list(string)
+  default     = null
+}
+
+variable "container_command" {
+  description = "Optional command override. null = image default."
+  type        = list(string)
+  default     = null
+}
+
 variable "log_retention_days" {
   description = "CloudWatch retention — 7 days keeps demo costs near zero."
   type        = number

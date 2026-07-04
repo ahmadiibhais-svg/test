@@ -138,3 +138,30 @@ made **during the build**.
   reviewable deploys and exact rollbacks.
 - **Follow-up promised to Ahmad:** after Phase 3 is green, a knowledge-only walkthrough of
   exactly how the Terraform + pipeline wiring would change for the immutable pattern.
+
+---
+
+## Phase 1 — Walking skeleton (2026-07-04)
+
+### D9 — Phase-1 implementation decisions (bundle)
+- **Subnets written explicitly, no loops:** at n=2 AZs, four named blocks beat a clever
+  loop for readability/defense; loops earn their place at n=13 (ecs-service instantiations).
+- **SG placement:** `alb-sg` lives INSIDE the alb module (belongs to the ALB); tier SGs
+  (frontend-sg, later backend/data/rds) live at the ROOT — they are the wiring BETWEEN
+  modules. Chain enforced on ingress with SG-as-source (identity, not IPs); egress open.
+- **One shared private route table** — honest reflection of the single-NAT decision;
+  multi-NAT production splits per AZ. `map_public_ip_on_launch` false everywhere.
+- **ALB tuning:** deregistration_delay 30 (fast drains at demo scale, default 300 slows
+  every deploy), health check interval 30/unhealthy 3 (~90s eject), matcher 200-299,
+  60s health-check grace only for ALB-attached services (slow Node boot).
+- **Log groups created by Terraform** (not lazily by the awslogs driver) so 7-day
+  retention is enforced — driver-created groups default to never-expire (cost leak).
+- **Task role deliberately empty** (apps make no AWS calls; least privilege); execution
+  role = managed AmazonECSTaskExecutionRolePolicy. Secrets (Phase 2) land on the
+  EXECUTION role: injection happens before the app exists.
+- **Skeleton image straight from Docker Hub** (weaveworksdemos/front-end:0.3.12) — the
+  ECR mirror + :stable arrives with the Phase-3 pipeline (D8). Docker Hub pulls ride the
+  NAT (tolled); post-mirror pulls ride the free S3 endpoint — a measurable cost argument.
+- **Evidence recorded:** storefront serving 60s after apply; kill-task demo: ALB ejected
+  the dead target in seconds, survivor carried traffic, self-heal to 2/2 in ~40s,
+  availability 100% throughout (every 10s probe returned 200).

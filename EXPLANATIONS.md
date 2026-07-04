@@ -15,6 +15,11 @@ New lessons get appended as the project advances.
 - [L8 — Terraform keywords reference](#l8)
 - [L9 — The command lifecycle + our exact bootstrap chronology](#l9)
 - [L10 — What goes to git vs what stays local](#l10)
+- [L11 — Modules; the network module = L1 as code](#l11)
+- [L12 — The ECS "cluster": a false friend; Service Connect; Container Insights](#l12)
+- [L13 — Security groups + ALB anatomy](#l13)
+- [L14 — ecs-service: the two roles, the pod-spec mapping, the circuit breaker](#l14)
+- [L15 — Subnetting, the local route, and the full-picture diagram](#l15)
 - [Defense question bank](#defense-question-bank)
 
 ---
@@ -427,6 +432,274 @@ Rule of thumb: **commit declarations, ignore records and caches.**
 
 ---
 
+<a name="l11"></a>
+## L11 — Modules; the network module = L1 as code
+
+**A module is a Helm chart.** A folder of `.tf` files designed to be *called*, never
+applied directly — no state, no backend, no life of its own. A root *instantiates* it:
+
+| Helm | Terraform |
+|---|---|
+| chart (templates/) | module (folder of .tf) |
+| values.yaml fields | the module's `variable` blocks |
+| `helm install rel ./chart -f values` | `module "name" { source = … , var = … }` |
+| chart outputs | the module's `output` blocks |
+
+```hcl
+module "network" {                      # keyword + ONE label (instance nickname)
+  source     = "../../modules/network"  # the only special argument: folder path
+  aws_region = var.aws_region           # everything else fills the module's variables
+}
+```
+
+- Read a module's returns as `module.network.vpc_id` (reference rooted at `module.`).
+- **init's 4th job: installing modules** (L9 listed three — this is the fourth).
+  New module block → re-run `terraform init`.
+- Modules inherit the root's `provider` config — no provider blocks inside modules.
+- Module resources get namespaced addresses: `module.network.aws_vpc.this`. That prefix
+  is why one root can call the same module 13× (ecs-service) without collisions.
+- **Defense line:** "Modules are my charts: versioned units with typed inputs and outputs;
+  environments are roots that compose them with different values."
+
+**The network module, resource by resource (L1 as code):**
+
+| Resource | L1 concept |
+|---|---|
+| `aws_vpc` 10.0.0.0/16, DNS on | the sealed box (DNS on because Service Connect + RDS hostnames need it) |
+| 4 × `aws_subnet` (2 public, 2 private, across us-east-1a/b) | rooms; AZs = failure domains |
+| `aws_internet_gateway` | the two-way inbound door |
+| `aws_eip` + `aws_nat_gateway` in public-a | the outbound-only toll road (💰 ~$0.045/hr + $0.005/hr for the IPv4) |
+| 2 × `aws_route_table` + 4 associations | what MAKES a subnet public/private |
+| `aws_vpc_endpoint` Gateway/S3 on the private table | the free bypass for image layers |
+
+**Key facts to articulate:**
+- **"Public subnet" is not a checkbox.** It is route-table membership: associated table
+  has `0.0.0.0/0 → IGW` = public; `0.0.0.0/0 → NAT` = private. Point at the exact block.
+- **`depends_on`** (new meta-argument, same family as `lifecycle`): ordering normally
+  comes from references (L2), but the NAT never *references* the IGW — yet can't function
+  until the VPC has one. `depends_on = [aws_internet_gateway.this]` states a dependency
+  the reference graph cannot see. Use it only for exactly this situation.
+- **`map_public_ip_on_launch` stays false even on public subnets:** nothing there needs an
+  automatic public IP (ALB manages its own, NAT has its EIP). Least surface everywhere.
+- **One shared private route table** because one NAT; the multi-NAT production upgrade
+  splits it into per-AZ tables, each pointing at its local NAT.
+- Subnets written explicitly, no loop: at n=2, four named blocks beat a clever loop.
+  Loops (for_each) earn their place at n=13 (ecs-service) — readability is a size decision.
+- List indexing: `var.azs[0]` = first element of a list variable.
+
+---
+
+<a name="l12"></a>
+## L12 — The ECS "cluster": a false friend; Service Connect; Container Insights
+
+**"Cluster" is a false friend for K8s people.** K8s cluster = a control plane you operate
++ nodes that exist. ECS-with-Fargate cluster = neither: AWS runs the control plane
+invisibly (no fee, no upgrades — part of the ECS-over-EKS rationale), and there are NO
+nodes — each task gets its own right-sized micro-VM that exists only while the task runs.
+What remains is a **logical boundary**: a named scheduling domain carrying default
+settings and scoping monitoring.
+
+**Defense line:** "An ECS/Fargate cluster is closer to a K8s namespace + scheduler config
+than to a cluster — there is no infrastructure inside it until a task runs."
+
+**The two resources:**
+1. `aws_service_discovery_http_namespace` "sockshop" — the **CoreDNS role**: the registry
+   where each service publishes its discovery name. front-end calling `http://catalogue/`
+   resolves through this — ECS's analog of K8s Service DNS in a namespace. This is WHY
+   discovery names must exactly match the hostnames baked into the images (locked list):
+   the images offer no knob to change what they call.
+2. `aws_ecs_cluster` with:
+   - `setting { containerInsights = "enabled" }` — the **cAdvisor/metrics-server role**:
+     per-service CPU/memory/task-count → CloudWatch. Phase 4 dashboards and Phase 5
+     auto-scaling read these. 💰 bills as custom metrics (~$1–3/mo at our scale).
+   - `service_connect_defaults { namespace = … }` — services created in the cluster join
+     the namespace automatically.
+
+**Also observed at apply time (unit 1):** the dependency choreography is visible in the
+apply log — private route table waited on NAT (reference), NAT waited on IGW (explicit
+depends_on), endpoint waited on the table. Nobody wrote that ordering; the graph did.
+And: a follow-up plan does NOT touch already-applied resources — the diary knows them,
+code matches reality, "0 to change." State doing its job.
+
+**War story (real error we hit):** first-ever `CreateCluster` in the account failed with
+"ECS Service Linked Role is not ready." A **service-linked role** is an IAM role a service
+owns and manages for itself (`AWSServiceRoleForECS`), auto-created on the account's FIRST
+use of the service — our first call both triggered its creation and raced it. Transient;
+retry succeeded. Two lessons: (1) fresh accounts have first-touch races — pre-create SLRs
+(`aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com`) or expect one
+retry; (2) read the error before theorizing — it named its exact cause (it was NOT a
+free-plan restriction). Bonus observed: the namespace had already succeeded and the retry
+plan showed only "1 to add" — state recovering a partial failure exactly as designed.
+
+---
+
+<a name="l13"></a>
+## L13 — Security groups + ALB anatomy
+
+**Security group = stateful virtual firewall attached to a NETWORK INTERFACE** (not to a
+subnet — that's NACLs). Contrast line: "NACLs guard the room, SGs guard the individual
+sockets; my unit of security is the workload, not the subnet."
+
+Two properties carry the whole security story:
+1. **Stateful:** write rules only for the INITIATING direction; replies are auto-allowed.
+   Rules read as "who may start a conversation with whom."
+2. **SG-as-source:** a rule can name another security group instead of IPs — "allow 8079
+   from anyone holding alb-sg." Identity-based, exactly a NetworkPolicy podSelector.
+   Task IPs churn (scaling, failover, deploys); the rule never changes.
+
+The least-privilege chain (each arrow = one ingress rule naming the previous group):
+```
+internet --80--> [alb-sg] --8079--> [frontend-sg] --80--> [backend-sg] --27017/5672--> [data-sg]
+                                                              └--3306--> [rds-sg]
+```
+- alb-sg is the ONE place `0.0.0.0/0` is correct: it IS the public front door.
+- Egress stays open everywhere; the chain is enforced on ingress (deliberate, standard,
+  keeps the policy readable).
+
+**ALB anatomy — three resources, three K8s roles:**
+
+| Resource | K8s role | Decides |
+|---|---|---|
+| `aws_lb` | the Ingress controller appliance (managed, multi-AZ) | placement (public subnets), firewall (alb-sg) |
+| `aws_lb_target_group` | EndpointSlice + readinessProbe | who gets traffic, and when they're healthy |
+| `aws_lb_listener` | the Ingress rule | ":80 → forward to that group" |
+
+Three arguments to articulate:
+- **`target_type = "ip"`** — Fargate/awsvpc gives every task its own ENI + private IP
+  (pod-IPs, literally), so the ALB targets IPs. `"instance"` is the NodePort-era pattern;
+  there are no instances here.
+- **`health_check { path = "/" }`** — ALB-side readinessProbe; fail 3× → out of rotation.
+- **`deregistration_delay = 30`** — connection draining = terminationGracePeriod for
+  in-flight requests: new traffic stops instantly, existing requests get 30s (default 300s
+  = slow rollouts for nothing at demo scale).
+
+Cross-module wiring appears here for the first time:
+`vpc_id = module.network.vpc_id` — one chart's outputs feed the next chart's values; the
+root is the composition layer. HTTPS/ACM = documented production upgrade, not in time box.
+
+---
+
+<a name="l14"></a>
+## L14 — ecs-service: the two roles, the pod-spec mapping, the circuit breaker
+
+**THE concept-pair (classic interview question): execution role vs task role.**
+
+| | Execution role | Task role |
+|---|---|---|
+| Who uses it | the ECS PLATFORM, before/around the container | YOUR APP CODE, inside the container |
+| For what | pull image from ECR, write CloudWatch logs, fetch+inject secrets | AWS API calls at runtime (S3, SQS, …) |
+| K8s mapping | the kubelet's credentials | the pod's ServiceAccount (IRSA-style) |
+| Failure signature | CannotPullContainerError, log failures | app logs AccessDenied at runtime |
+| Ours | managed AmazonECSTaskExecutionRolePolicy | created but EMPTY (apps make no AWS calls) |
+
+Diagnostic rule: **before-the-app failures → execution role; inside-the-app failures →
+task role.** Defense line for the empty task role: "my apps call no AWS APIs, so their
+runtime identity has zero permissions; Phase-2 secrets land on the EXECUTION role,
+because injection happens before the app exists."
+
+**The mapping table:**
+
+| ECS piece | K8s equivalent |
+|---|---|
+| task definition | pod spec (immutable revisions) |
+| service (`desired_count`) | Deployment (replicas; replaces dead tasks) |
+| `network_configuration` | pod networking: private subnets, tier SG, `assign_public_ip=false` |
+| `service_connect_configuration` | Service registration in DNS (port_name must match the portMapping name) |
+| `deployment_circuit_breaker { rollback = true }` | rollout failure policy + AUTO-ROLLBACK: failing deploy halts and reverts to last working revision. THE rollback story (prod upgrade: CodeDeploy blue/green) |
+| log group `/ecs/sockshop/<name>`, 7d | the log pipeline |
+
+**Grammar met in this module:**
+1. `jsonencode({...})` — HCL object → JSON string (container_definitions is historically
+   a JSON-string field; also used for IAM trust policies).
+2. for-expression `[for k, v in var.environment : { name = k, value = v }]` — reshape a
+   friendly map into the API's list-of-objects (a list comprehension).
+3. `dynamic "load_balancer" { for_each = … }` — render a nested block 0..N times; here
+   0-or-1: only front-end passes a target group; 12 others render nothing.
+4. Ternary `cond ? a : b` — ALB-attached services get 60s health-check grace, others null.
+
+**Also:** tier SGs (frontend-sg…) live at the ROOT, not in a module — they are exactly
+the wiring BETWEEN modules. One `module "front_end"` block → six resources: the leverage
+that pays for the module 13×.
+
+---
+
+<a name="l15"></a>
+## L15 — Subnetting, the local route, and the full-picture diagram
+
+**CIDR:** `/N` = first N of 32 bits locked, rest free. `/16` = 65,536 addresses
+(10.0.0.0–10.0.255.255); `/24` = 256 (AWS reserves 5 per subnet — network, router,
+**DNS resolver at .2**, spare, broadcast — leaving 251 usable).
+
+**The carving:** VPC owns the /16 (the estate — outer boundary, nothing lives in it
+directly). Subnets are non-overlapping /24 plots: 10.0.0.0/24 public-a, 10.0.1.0/24
+public-b, 10.0.10.0/24 private-a, 10.0.11.0/24 private-b. Gaps (2–9, 12+) = growth
+without renumbering; "10.0.**10**.x = private tier" reads at a glance. Each Fargate task
+consumes exactly one IP (its ENI). Oversizing the VPC is free; resizing later is pain.
+
+**THE key fact — subnets need NO help talking to each other.** Every route table in a
+VPC carries an immutable implicit route: `10.0.0.0/16 → local` = the VPC fabric. All
+subnets are layer-3 adjacent, across AZs, always. IGW/NAT are ONLY for `0.0.0.0/0`
+(unknown destinations) — "public/private" describes that one route and nothing else.
+Control lives one layer up: **routing answers CAN it get there (in-VPC: always);
+security groups answer MAY the connection be accepted (per ENI, per port, per
+source-identity).** ALB→task works because `local` carries it AND frontend-sg permits
+it. Delete the SG rule: still routed, dropped at the ENI.
+
+**Defense line:** "Subnets don't need help talking — the local route makes the VPC
+layer-3 adjacent; my SGs turn 'reachable' into 'allowed'."
+
+**Line-level walkthrough highlights (the why-this-value layer):**
+- `enable_dns_support` turns on the VPC resolver at 10.0.0.2; without it nothing inside
+  resolves anything (ECR endpoints, SC names, RDS hostnames). `enable_dns_hostnames`
+  issues names; the pair-true is the standard posture.
+- NAT sits in public-a = the single-NAT trade-off IN CODE; must be in a public subnet
+  (needs the IGW path).
+- The 4 route_table_associations are what MAKE subnets public/private.
+- S3 endpoint attached to the private table only — that's where image-layer traffic
+  originates.
+- TG health math: interval 30 × unhealthy 3 ≈ 90s to eject; healthy 2 ≈ 60s to admit;
+  matcher 200-299 so redirects can't fake health.
+- Log groups created BY Terraform so 7-day retention is enforced (driver-created groups
+  default to never-expire).
+- IAM trust policy (`assume_role_policy`) answers WHO MAY WEAR the role
+  (ecs-tasks.amazonaws.com); the attached policy answers WHAT IT MAY DO.
+- `family` = versioned task-def name; deploys mint revisions; the circuit breaker rolls
+  back to the previous one.
+- `desired_count` will be taken over by the Phase-5 autoscaler (lifecycle ignore_changes
+  lands then).
+- Tier SGs live at the ROOT (wiring between modules); alb-sg lives IN the alb module
+  (belongs to the ALB).
+- var.name quadruple duty (service/container/SC-name/log suffix) = locked-hostname rule
+  enforced by construction.
+
+**The diagram** (user → IGW → ALB[alb-sg] in public-a/b → :8079 → front-end tasks
+[frontend-sg] with own ENIs in private-a/b → SC namespace "sockshop"; NAT+EIP in
+public-a ← private RT 0/0; S3 prefix → gateway endpoint; outside the VPC: Docker Hub,
+ECR API, CloudWatch via NAT; S3 layers via endpoint):
+
+```
+INTERNET → IGW → [ALB nodes, public-a/b, alb-sg :80]
+                     │ :8079 (local route carries; frontend-sg permits src=alb-sg)
+                     ▼
+            [front-end tasks, private-a/b, own ENIs 10.0.10.x/10.0.11.x]
+                     │ bare names via Service Connect "sockshop" (Phase 2: 12 more)
+                     ▼
+   egress: 0/0 → NAT (tolled) → Docker Hub/ECR API/CloudWatch
+           S3 prefix → gateway endpoint (free) → S3 (image layers)
+
+SG chain: world ─80→ alb-sg ─8079→ frontend-sg ─80→ backend-sg ─27017/5672→ data-sg
+                                                        └─3306→ rds-sg   (Phase 2)
+```
+
+**Journey of a page load:** browser → ALB node (alb-sg :80) → healthy target either AZ →
+local route → ENI :8079 (frontend-sg) → reply back same stateful path. IGW only at the
+edge; NAT never.
+**Journey of an image pull:** ENI → private RT → ECR auth/manifest via NAT (KB, tolled)
+→ layers via S3 endpoint (MB, free). Docker Hub pulls ride NAT entirely — the Phase-3
+ECR mirror fixes that cost.
+
+---
+
 ## Defense question bank
 
 1. Why does bootstrap keep local state while the main root uses S3 — and what breaks if
@@ -439,3 +712,19 @@ Rule of thumb: **commit declarations, ignore records and caches.**
 6. Why is `terraform.tfvars` gitignored but `.terraform.lock.hcl` committed? (L5/L10)
 7. What exactly does a saved plan file freeze, and why does that make the approval gate
    trustworthy? (L9)
+8. Why does the NAT gateway carry an explicit `depends_on` when every other resource
+   orders itself automatically? (L11)
+9. What makes a subnet "public"? Point at the exact resource and line that decides it. (L11)
+10. Why is `map_public_ip_on_launch` left false even on the public subnets? (L11)
+11. "So how many nodes are in your ECS cluster?" — the trap question. Answer it. (L12)
+12. Why must Service Connect discovery names exactly match the compose hostnames —
+    where is the constraint actually coming from? (L12)
+13. Why is the ALB's target group `target_type = "ip"` and not `"instance"`? (L13)
+14. Your SG rules mostly name other SGs instead of CIDRs — why is that better here, and
+    what's the K8s equivalent? (L13)
+15. What does `deregistration_delay = 30` buy you during a deploy? (L13)
+16. Your task pulls its image fine but the app gets AccessDenied calling S3 — which of
+    the two roles is wrong, and why are you sure? (L14)
+17. Walk me through what the deployment circuit breaker does when a bad image ships. (L14)
+18. Why is the task role deliberately empty, and where will the Phase-2 secret permission
+    land instead? (L14)

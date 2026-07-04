@@ -113,3 +113,28 @@ made **during the build**.
   hard-capped by credits (a safety property), but some non-eligible services may be blocked;
   treat unexplained AccessDenied/subscription errors as a plan-restriction signal. Upgrade
   path if ever needed: switch to paid plan (credits still spend first).
+
+### D8 — Image tagging: mutable `:stable` + unique SHA tag for the assessment; IMMUTABLE is the production pattern
+- **Decided:** ECR repositories use `image_tag_mutability = "MUTABLE"` (bootstrap/ecr.tf).
+  The Phase-3 pipeline will push every image **twice**: once tagged with the pipeline's
+  commit SHA (unique, never reused — the audit trail) and once as **`:stable`** (a movable
+  pointer meaning "current good one"). Task definitions reference `:stable`; deploying =
+  re-pointing `:stable` and forcing a new ECS deployment, so the task definition itself
+  never has to change.
+- **Alternatives:** IMMUTABLE repositories + a unique tag (or, strictest, the digest
+  `image@sha256:…`) per deploy, with the reference driven through Terraform so every deploy
+  is a reviewable diff.
+- **Why mutable here:** time-boxed assessment — the mutable scheme keeps the pipeline and
+  task definitions simple, while the parallel SHA tags preserve "what exactly was running
+  when" evidence. The weaknesses of a movable pointer are understood, accepted, and
+  documented rather than ignored:
+  1. **Audit:** the name in the task definition (`:stable`) doesn't identify the bytes —
+     the pointer has moved since.
+  2. **Rollback:** re-pointing is rollback-by-trust; a unique tag is rollback-by-reference.
+  3. **Security:** compromised registry credentials could silently re-point `:stable` so the
+     next restart deploys an attacker's image under an innocent name.
+- **Production path (for docs + defense):** flip repos to IMMUTABLE, pin task definitions to
+  the unique tag or digest, drive each change through Terraform/merge request — explicit,
+  reviewable deploys and exact rollbacks.
+- **Follow-up promised to Ahmad:** after Phase 3 is green, a knowledge-only walkthrough of
+  exactly how the Terraform + pipeline wiring would change for the immutable pattern.

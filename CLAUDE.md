@@ -57,6 +57,18 @@ If full 12-service deployment is not working by end of Sunday: cut to the core j
 └── slides/               # presentation
 ```
 
+## Current status (updated at each session close — last: Saturday 2026-07-04, late night)
+Phases 0–2 COMPLETE, committed, pushed — one day ahead of plan. Main root destroyed for the
+night (114 resources, rebuildable by one apply); bootstrap alive; ≈$1.50 of $140 credits used.
+Decisions D1–D12 in DECISIONS.md. Ahmad's study file EXPLANATIONS.md carries lessons L1–L18 +
+the defense question bank — append every new lesson there. Sunday: timed rebuild (repeatability
+proof + D12 ordering test) → browser journey incl. checkout + screenshots (Phase 2 acceptance
+evidence) → Phase 3 CI/CD (GitLab project path now known; OIDC per D7). Standing promises:
+post-Phase-3 immutable-tags walkthrough (D8), ecr.tf deep-dive, Ahmad's open exercises
+(encryption read-back, defense Qs, skill-file-in-repo decision). Teaching style is contractual:
+word-by-word, narrative not tables, his vocabulary (the diary, the toll road, the sealed box,
+chain links, the spy).
+
 ## Session start ritual
 1. Read DECISIONS.md tail + current phase in the skill.
 2. `terraform state list` / AWS console sanity check: what exists right now, what is it costing.

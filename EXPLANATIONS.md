@@ -22,6 +22,7 @@ New lessons get appended as the project advances.
 - [L15 — Subnetting, the local route, and the full-picture diagram](#l15)
 - [L16 — The deployment watch playbook (CLI + console, in dependency order)](#l16)
 - [L17 — The error chronicle: every failure, cause, fix, and lesson](#l17)
+- [L18 — The Saturday story (narrative retelling of L16+L17 — read this one first)](#l18)
 - [Defense question bank](#defense-question-bank)
 
 ---
@@ -854,6 +855,131 @@ distinguish component bugs from orchestration bugs — this was pure orchestrati
 My 13-service polling call errored every cycle and the watcher reported nothing.
 Fix: batch calls. Lesson: know the API limits your monitoring depends on — and when a
 monitor says nothing at all, suspect the monitor.
+
+---
+
+<a name="l18"></a>
+## L18 — The Saturday story (narrative retelling of L16+L17 — read this one first)
+
+*L16 and L17 above are the reference cards. This is the story — the version to re-read
+before the defense, in the vocabulary we built together.*
+
+### Part 1 — How to watch a deployment
+
+Things can only come alive in the order they stand on each other — so you watch in the
+order Terraform builds, which is the L15 diagram top to bottom.
+
+**The plan is step zero and it IS the review.** Read the three counts; read the destroy
+count twice, because that's where money and data disappear. Then the apply scroll is
+your first monitor: `Creation complete` lines print in dependency order (remember the
+private route table waiting for the NAT, the NAT waiting for the IGW) — if something
+breaks, the scroll shows how far up the tower you got.
+
+**The network barely needs watching** — a sealed box and its wiring can't be "unhealthy."
+The only piece with a pulse is the toll road: ~2 minutes to Available (VPC → NAT
+gateways). While there, click the private route table and SEE the two rows we spent an
+evening on: `0.0.0.0/0 → nat-…` and S3 prefix → `vpce-…`.
+
+**Two slow appliances:** the ALB (~3 min, EC2 → Load balancers, Provisioning → Active)
+and RDS (~5–8 min, RDS → Databases, creating → available). RDS creation time is free
+work time — we wrote the whole seed task inside that window.
+
+**The real watching is ECS.** Console: ECS → sockshop → each service, two tabs.
+Vocabulary trap first: ECS says "deployment" where K8s says *rollout*. TWO deployments
+listed = a roll in progress (new set rising, old set draining) — we watched front-end
+sit exactly there as the last straggler. Settled = ONE deployment, rolloutState
+COMPLETED, running == desired, failed 0 (failed climbing = the circuit breaker
+gathering evidence). And the Events tab: **the service narrates itself in English** —
+"has reached a steady state" is the sentence every watcher of mine grep'd for; you can
+just read it.
+
+**Opening a task = opening the pod:** the app container plus the `ecs-service-connect`
+sidecar beside it; the ENI IP that reads like a sentence (10.0.10.x = private room,
+zone a); and — the fastest clue in the system — **dead tasks keep tombstones**
+(stoppedReason). Ours literally said "fault-tolerance demo: manual kill" because we
+wrote the epitaph ourselves.
+
+**Logs are where "it worked" gets written down** (CloudWatch → /ecs/sockshop/<name>):
+the seed proved itself with `sock_count: 10`; the spy proved the platform innocent with
+a printed hosts file. **The target group** (front-end only) is the readiness board the
+ALB routes by — two rows, one per zone; the kill demo made a row die and resurrect
+there. **Cloud Map** is the namespace's guest list — thirteen names, and under each,
+the registered instances. **And the only check that exercises the whole diagram at once
+is hitting the app** — `/catalogue` returning socks = door → front-end → name
+resolution → catalogue → toll-free path → RDS → seed, one round trip.
+
+**The ladder when something's wrong — cheapest truth first:** tombstone → logs → name
+resolution (and now the sharper question: **is the client's deployment OLDER than the
+server's registration?** → force-new-deployment the client) → the chain links (did the
+caller's SG admit the conversation?) → env/secrets last.
+
+One confession that belongs here: my own CLI watcher went blind for ten minutes because
+`describe-services` silently caps at 10 services and I asked for 13. **When a monitor
+reports nothing at all, suspect the monitor before the patient.** The console pages
+don't have that cap.
+
+### Part 2 — The day's battles
+
+**The morning stumbles.** The CLI vanished after install (a terminal is born with its
+PATH and never learns new tricks — fresh window). A key got pasted into chat → the
+rotation ritual, no exceptions, because chat and logs are storage. And my own safety
+gate refused to push to main because "here's the URL" isn't the sentence "push to
+main" — the guardrail biting its owner, as designed.
+
+**The butler race.** Our first-ever `CreateCluster` — the account's first word to ECS —
+failed with "Service Linked Role is not ready": touching ECS for the first time makes
+AWS create ECS's own butler-role, and our request beat the butler to the door. A retry
+worked; the namespace that had already succeeded stayed in the diary, so the retry
+created exactly one thing. The diary earning its keep on day one.
+
+**The arrow that wasn't allowed.** SG descriptions rejected `->` and apostrophes at
+plan time: `validate` is the spell-checker; **the provider at plan-time is the editor
+with opinions.**
+
+**The database that speaks a different dialect.** Catalogue is a 2017 Go program whose
+MySQL driver predates MySQL 8's default handshake. First fix: a server parameter. The
+14-agent review caught (BEFORE apply) that it needed a special apply method; then AWS
+trumped everyone — the parameter is immutable now. Both the reviewers and I argued from
+books; the API was reality. Pivot: teach *our one user* the old dialect instead — the
+seed task's modern mysql:8 client runs one `ALTER USER … mysql_native_password` line
+before old catalogue ever dials in. **The apply error is the only documentation that
+never goes stale.**
+
+**Reading the dump before drinking it.** One `GRANT` line would have detonated
+mid-import (MySQL 8 stopped auto-creating users on GRANT); one `sed` removed it.
+Table = `sock`, 10 rows — which is why the seed's success check counted socks.
+
+**The terminal that gaslights.** The seed's log-fetch "failed" — but the seed had
+succeeded (exit 0); Git Bash had rewritten `/ecs/sockshop/seed` into a Windows file
+path before AWS ever saw it. **When an AWS error shows a parameter you didn't type,
+suspect your shell first.**
+
+**THE HUNT.** Thirteen services deployed, everything green — and the storefront
+insisted `catalogue` didn't exist. We worked the suspects like detectives. *Timing?*
+Cycled the clients — still broken. *Naming?* Found a real bug: an omitted alias name
+defaults to `catalogue.sockshop` while the images dial bare `catalogue`. Fixed,
+redeployed all thirteen — **still broken**, with config provably perfect and behavior
+provably impossible. So we stopped theorizing and sent in **the spy**: a throwaway
+fourteenth service that printed its own `/etc/hosts` into its logs. Perfect hosts file
+— and the spy successfully called catalogue, which successfully called RDS. Platform
+innocent. Suspicion fell on the 2017 Node inside front-end — so the spy's second
+mission ran front-end's OWN image: Node v4.8.0 resolved and connected instantly.
+Runtime innocent. That left one difference between spy and front-end: **when their
+deployments were born.** The research fan-out returned the sentence that explained the
+night, from AWS's own docs: a client's name list is a **snapshot stapled to its
+deployment at creation** — "replacement tasks continue to behave the same as they did
+after the most recent deployment." **A fresh task is not a fresh deployment.** Our
+clients' deployments were born mid-wave and froze the stale table forever. Cure: one
+forced redeployment of the six consumer services — socks 75 seconds later. Permanent
+cure, in code: `depends_on` servers-before-clients (D12), tested by the next clean
+rebuild. Keepsakes: fresh task ≠ fresh deployment; when config is right and behavior
+is wrong, get ground truth from INSIDE the box; and nothing was broken in any
+component — the bug lived in the ORDER things happened. Component bugs and
+orchestration bugs are different animals.
+
+**Final score for the day:** ~ten fights, ten wins, every scar converted into code, a
+decision entry, or a defense question. 114 resources built, debugged, torn down, and
+reproducible from the repo for ≈$1.50.
 
 ---
 

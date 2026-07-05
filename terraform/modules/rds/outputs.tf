@@ -27,3 +27,8 @@ output "dsn_parameter_arn" {
   description = "SSM SecureString ARN of catalogue's complete DSN (catalogue injects it)."
   value       = aws_ssm_parameter.catalogue_dsn.arn
 }
+
+output "identifier" {
+  description = "Instance identifier — RDS CloudWatch metrics are dimensioned on this."
+  value       = aws_db_instance.this.identifier
+}

@@ -12,3 +12,8 @@ output "target_group_arn" {
   description = "front-end tasks register here (consumed by the ecs-service module)."
   value       = aws_lb_target_group.front_end.arn
 }
+
+output "alb_arn_suffix" {
+  description = "The ALB's CloudWatch identity — metrics are dimensioned on this, not the ARN."
+  value       = aws_lb.this.arn_suffix
+}

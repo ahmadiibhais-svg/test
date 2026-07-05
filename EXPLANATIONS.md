@@ -1050,6 +1050,10 @@ just means something lived briefly earlier in the month (the EC2 credit-activity
 
 ## Defense question bank
 
+> **Canonical workbook: [DEFENSE-QUESTIONS.md](DEFENSE-QUESTIONS.md)** — same questions,
+> grouped by theme with usage instructions. New questions get appended in BOTH places at
+> session close.
+
 1. Why does bootstrap keep local state while the main root uses S3 — and what breaks if
    you flip that? (L4)
 2. `for_each` vs `count` for the 13 ECR repos — what happens under each when a service is

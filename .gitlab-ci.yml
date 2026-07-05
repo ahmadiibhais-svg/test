@@ -156,12 +156,12 @@ mirror:
     - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
     - docker pull "$UPSTREAM"
     - trivy image --severity HIGH,CRITICAL --exit-code 0 "$UPSTREAM" # report-only; Phase 5 makes CRITICAL blocking + allowlist
-    # ECR auth WITHOUT aws-cli: Amazon's static Go credential helper — the
-    # apk-packaged (Python) aws-cli broke on musl (pyexpat symbol mismatch).
+    # ECR auth WITHOUT aws-cli: Amazon's Go credential helper, from Alpine's own
+    # package repo (the apk aws-cli broke on musl/pyexpat; Amazon's S3 download
+    # paths are dead; GitHub releases ship no binaries — Alpine packages it).
     # Docker invokes the helper automatically; it consumes the same OIDC env
     # vars; no registry password ever touches stdout or the job log.
-    - curl -sfL -o /usr/local/bin/docker-credential-ecr-login "https://amazon-ecr-credential-helper.s3.amazonaws.com/latest/linux-amd64/docker-credential-ecr-login"
-    - chmod +x /usr/local/bin/docker-credential-ecr-login
+    - apk add --no-cache docker-credential-ecr-login
     - mkdir -p ~/.docker
     - echo "{\"credHelpers\":{\"$ECR\":\"ecr-login\"}}" > ~/.docker/config.json
     - docker tag "$UPSTREAM" "$ECR/sockshop/$SERVICE:$CI_COMMIT_SHORT_SHA"

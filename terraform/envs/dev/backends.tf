@@ -19,7 +19,7 @@ module "catalogue" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "weaveworksdemos/catalogue:0.3.5"
+  image          = "${local.ecr}/catalogue:stable" # Phase-3 flip (was weaveworksdemos/catalogue:0.3.5)
   container_port = 80
 
   container_entrypoint = ["sh", "-c"]
@@ -43,7 +43,7 @@ module "user" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "weaveworksdemos/user:0.4.4" # D6: the pinned compose set
+  image          = "${local.ecr}/user:stable" # Phase-3 flip (was weaveworksdemos/user:0.4.4, D6)
   container_port = 80
 
   environment = {
@@ -62,7 +62,7 @@ module "payment" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "weaveworksdemos/payment:0.4.3"
+  image          = "${local.ecr}/payment:stable" # Phase-3 flip (was weaveworksdemos/payment:0.4.3)
   container_port = 80
 
   subnet_ids         = module.network.private_subnet_ids
@@ -79,7 +79,7 @@ module "carts" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "weaveworksdemos/carts:0.4.8"
+  image          = "${local.ecr}/carts:stable" # Phase-3 flip (was weaveworksdemos/carts:0.4.8)
   container_port = 80
 
   cpu    = 512 # Java floor (CLAUDE.md sizing)
@@ -109,7 +109,7 @@ module "orders" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "weaveworksdemos/orders:0.4.7"
+  image          = "${local.ecr}/orders:stable" # Phase-3 flip (was weaveworksdemos/orders:0.4.7)
   container_port = 80
 
   cpu    = 512
@@ -133,7 +133,7 @@ module "shipping" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "weaveworksdemos/shipping:0.4.8"
+  image          = "${local.ecr}/shipping:stable" # Phase-3 flip (was weaveworksdemos/shipping:0.4.8)
   container_port = 80
 
   cpu    = 512
@@ -159,7 +159,7 @@ module "queue_master" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "weaveworksdemos/queue-master:0.3.1"
+  image          = "${local.ecr}/queue-master:stable" # Phase-3 flip (was weaveworksdemos/queue-master:0.3.1)
   container_port = 80
 
   cpu    = 512

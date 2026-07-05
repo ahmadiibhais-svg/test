@@ -20,9 +20,9 @@ module "front_end" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  # Public image straight from Docker Hub for the skeleton; the Phase-3 pipeline
-  # replaces this with our ECR mirror + :stable (D8).
-  image          = "weaveworksdemos/front-end:0.3.12"
+  # Phase-3 flip (D8/D13): served from OUR registry; the pipeline's mirror job is
+  # the only road in (upstream was weaveworksdemos/front-end:0.3.12).
+  image          = "${local.ecr}/front-end:stable"
   container_port = 8079 # SERVICES.md
 
   cpu           = 256

@@ -11,7 +11,7 @@ module "rabbitmq" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "rabbitmq:3.6.8" # plain, not -management: CloudWatch replaces the Prometheus sidecar story (SERVICES.md)
+  image          = "${local.ecr}/rabbitmq:stable" # Phase-3 flip (was rabbitmq:3.6.8; plain, not -management — SERVICES.md)
   container_port = 5672
 
   subnet_ids         = module.network.private_subnet_ids
@@ -26,7 +26,7 @@ module "carts_db" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "mongo:3.4" # pinned per D5 — the version the 2017 Spring clients speak
+  image          = "${local.ecr}/carts-db:stable" # Phase-3 flip (was mongo:3.4, D5)
   container_port = 27017
 
   subnet_ids         = module.network.private_subnet_ids
@@ -41,7 +41,7 @@ module "orders_db" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "mongo:3.4" # D5
+  image          = "${local.ecr}/orders-db:stable" # Phase-3 flip (was mongo:3.4, D5)
   container_port = 27017
 
   subnet_ids         = module.network.private_subnet_ids
@@ -56,7 +56,7 @@ module "user_db" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "weaveworksdemos/user-db:0.4.0" # seed users baked in; re-seeds on restart
+  image          = "${local.ecr}/user-db:stable" # Phase-3 flip (was weaveworksdemos/user-db:0.4.0; seed users baked in)
   container_port = 27017
 
   subnet_ids         = module.network.private_subnet_ids
@@ -71,7 +71,7 @@ module "session_db" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "redis:alpine" # D4: shared session store for the scaled front-end
+  image          = "${local.ecr}/session-db:stable" # Phase-3 flip (was redis:alpine, D4 — now pinned by OUR mirror, not a moving upstream tag)
   container_port = 6379
 
   subnet_ids         = module.network.private_subnet_ids

@@ -151,12 +151,19 @@ mirror:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
   script:
-    - apk add --no-cache aws-cli curl
+    - apk add --no-cache curl
     # Trivy binary (scan the upstream BEFORE it enters our registry)
     - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
     - docker pull "$UPSTREAM"
     - trivy image --severity HIGH,CRITICAL --exit-code 0 "$UPSTREAM" # report-only; Phase 5 makes CRITICAL blocking + allowlist
-    - aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR"
+    # ECR auth WITHOUT aws-cli: Amazon's static Go credential helper — the
+    # apk-packaged (Python) aws-cli broke on musl (pyexpat symbol mismatch).
+    # Docker invokes the helper automatically; it consumes the same OIDC env
+    # vars; no registry password ever touches stdout or the job log.
+    - curl -sfL -o /usr/local/bin/docker-credential-ecr-login "https://amazon-ecr-credential-helper.s3.amazonaws.com/latest/linux-amd64/docker-credential-ecr-login"
+    - chmod +x /usr/local/bin/docker-credential-ecr-login
+    - mkdir -p ~/.docker
+    - echo "{\"credHelpers\":{\"$ECR\":\"ecr-login\"}}" > ~/.docker/config.json
     - docker tag "$UPSTREAM" "$ECR/sockshop/$SERVICE:$CI_COMMIT_SHORT_SHA"
     - docker tag "$UPSTREAM" "$ECR/sockshop/$SERVICE:stable"
     - docker push "$ECR/sockshop/$SERVICE:$CI_COMMIT_SHORT_SHA"

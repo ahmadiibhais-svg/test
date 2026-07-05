@@ -15,6 +15,7 @@ stages:
   - apply
   - mirror
   - deploy
+  - destroy
 
 # The whole OIDC handshake: GitLab mints a signed job identity (the passport);
 # these two env vars make every AWS SDK (terraform, aws cli) trade it at STS
@@ -182,5 +183,25 @@ deploy:
     - aws ecs update-service --cluster sockshop --service "$SERVICE" --force-new-deployment
     - aws ecs wait services-stable --cluster sockshop --services "$SERVICE"
   when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# The nightly cost ritual as a pipeline button (D14). Destroys the DEV root only —
+# bootstrap (state bucket, ECR, budget, OIDC) is never pipeline-destroyed.
+# TWO locks: the manual trigger AND a typed confirmation — when pressing play,
+# add variable CONFIRM_DESTROY = sockshop-dev, or the job refuses.
+tf-destroy:
+  stage: destroy
+  extends: .aws-auth
+  image:
+    name: hashicorp/terraform:1.15
+    entrypoint: [""]
+  script:
+    - if [ "$CONFIRM_DESTROY" != "sockshop-dev" ]; then echo "REFUSING. Re-run this job with variable CONFIRM_DESTROY=sockshop-dev (Run pipeline / job variables)."; exit 1; fi
+    - cd "$TF_DIR"
+    - terraform init -input=false
+    - terraform destroy -auto-approve -input=false
+  when: manual
+  resource_group: dev # never concurrent with an apply
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

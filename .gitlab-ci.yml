@@ -1,0 +1,179 @@
+# Avertra Sock Shop — two flows in one pipeline (D13):
+#   INFRA: fmt/validate/tfsec -> plan (artifact) -> MANUAL apply   (Continuous Delivery, not Deployment)
+#   APP:   mirror upstream -> Trivy scan -> push :sha + :stable to ECR -> manual per-service deploy
+# Auth: OIDC only — zero stored AWS credentials (bootstrap/oidc.tf, D13).
+
+variables:
+  AWS_DEFAULT_REGION: us-east-1
+  ROLE_ARN: arn:aws:iam::448049810701:role/avertra-sockshop-gitlab-ci
+  ECR: 448049810701.dkr.ecr.us-east-1.amazonaws.com
+  TF_DIR: terraform/envs/dev
+
+stages:
+  - validate
+  - plan
+  - apply
+  - mirror
+  - deploy
+
+# The whole OIDC handshake: GitLab mints a signed job identity (the passport);
+# these two env vars make every AWS SDK (terraform, aws cli) trade it at STS
+# for ~1h credentials automatically. Nothing stored, nothing to rotate.
+.aws-auth:
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: https://gitlab.com
+  before_script:
+    - echo "$AWS_ID_TOKEN" > "$CI_PROJECT_DIR/.web-identity-token"
+    - export AWS_WEB_IDENTITY_TOKEN_FILE="$CI_PROJECT_DIR/.web-identity-token"
+    - export AWS_ROLE_ARN="$ROLE_ARN"
+    - export AWS_ROLE_SESSION_NAME="gitlab-$CI_JOB_ID"
+
+.infra-rules:
+  rules:
+    - changes:
+        - terraform/**/*
+        - bootstrap/**/*
+        - .gitlab-ci.yml
+
+# ---------------------------------------------------------------- INFRA FLOW
+tf-fmt:
+  stage: validate
+  extends: .infra-rules
+  image:
+    name: hashicorp/terraform:1.15
+    entrypoint: [""]
+  script:
+    - terraform fmt -check -recursive terraform bootstrap
+
+tf-validate:
+  stage: validate
+  extends: .infra-rules
+  image:
+    name: hashicorp/terraform:1.15
+    entrypoint: [""]
+  script:
+    - cd "$TF_DIR"
+    - terraform init -backend=false -input=false # no AWS needed for a schema check
+    - terraform validate
+
+tfsec:
+  stage: validate
+  extends: .infra-rules
+  image:
+    name: aquasec/tfsec:latest
+    entrypoint: [""]
+  script:
+    - tfsec .
+  # Report-only until Phase 5 hardens the policy with a documented ignore file —
+  # scanning without a triage policy is noise (it WILL flag port-80 ALB etc.).
+  allow_failure: true
+
+tf-plan:
+  stage: plan
+  extends: [.aws-auth, .infra-rules]
+  image:
+    name: hashicorp/terraform:1.15
+    entrypoint: [""]
+  script:
+    - cd "$TF_DIR"
+    - terraform init -input=false # S3 backend auths via the OIDC env vars
+    - terraform plan -input=false -out=plan.tfplan
+    - terraform show -no-color plan.tfplan > plan.txt
+  artifacts:
+    paths:
+      - $TF_DIR/plan.tfplan
+      - $TF_DIR/plan.txt
+    expire_in: 1 week
+
+# THE manual gate — Continuous Delivery, not Deployment: the pipeline makes the
+# release possible; a human makes it happen. Applies exactly the reviewed artifact.
+tf-apply:
+  stage: apply
+  extends: .aws-auth
+  image:
+    name: hashicorp/terraform:1.15
+    entrypoint: [""]
+  script:
+    - cd "$TF_DIR"
+    - terraform init -input=false
+    - terraform apply -input=false plan.tfplan
+  needs: [tf-plan]
+  when: manual
+  resource_group: dev # serialize applies — one writer, like the state lock story
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - terraform/**/*
+        - bootstrap/**/*
+        - .gitlab-ci.yml
+
+# ------------------------------------------------------------------ APP FLOW
+# Supply-chain story: upstream images are pulled ONCE, scanned, then served
+# from OUR registry under both an immutable :sha tag (audit) and :stable (D8).
+.service-matrix:
+  parallel:
+    matrix:
+      - SERVICE: front-end
+        UPSTREAM: weaveworksdemos/front-end:0.3.12
+      - SERVICE: catalogue
+        UPSTREAM: weaveworksdemos/catalogue:0.3.5
+      - SERVICE: carts
+        UPSTREAM: weaveworksdemos/carts:0.4.8
+      - SERVICE: orders
+        UPSTREAM: weaveworksdemos/orders:0.4.7
+      - SERVICE: shipping
+        UPSTREAM: weaveworksdemos/shipping:0.4.8
+      - SERVICE: queue-master
+        UPSTREAM: weaveworksdemos/queue-master:0.3.1
+      - SERVICE: payment
+        UPSTREAM: weaveworksdemos/payment:0.4.3
+      - SERVICE: user
+        UPSTREAM: weaveworksdemos/user:0.4.4
+      - SERVICE: user-db
+        UPSTREAM: weaveworksdemos/user-db:0.4.0
+      - SERVICE: carts-db
+        UPSTREAM: mongo:3.4
+      - SERVICE: orders-db
+        UPSTREAM: mongo:3.4
+      - SERVICE: session-db
+        UPSTREAM: redis:alpine
+      - SERVICE: rabbitmq
+        UPSTREAM: rabbitmq:3.6.8
+
+mirror:
+  stage: mirror
+  extends: [.aws-auth, .service-matrix]
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - apk add --no-cache aws-cli curl
+    # Trivy binary (scan the upstream BEFORE it enters our registry)
+    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+    - docker pull "$UPSTREAM"
+    - trivy image --severity HIGH,CRITICAL --exit-code 0 "$UPSTREAM" # report-only; Phase 5 makes CRITICAL blocking + allowlist
+    - aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR"
+    - docker tag "$UPSTREAM" "$ECR/sockshop/$SERVICE:$CI_COMMIT_SHORT_SHA"
+    - docker tag "$UPSTREAM" "$ECR/sockshop/$SERVICE:stable"
+    - docker push "$ECR/sockshop/$SERVICE:$CI_COMMIT_SHORT_SHA"
+    - docker push "$ECR/sockshop/$SERVICE:stable"
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+deploy:
+  stage: deploy
+  extends: [.aws-auth, .service-matrix]
+  image:
+    name: amazon/aws-cli:2.22.0
+    entrypoint: [""]
+  script:
+    - aws ecs update-service --cluster sockshop --service "$SERVICE" --force-new-deployment
+    - aws ecs wait services-stable --cluster sockshop --services "$SERVICE"
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"

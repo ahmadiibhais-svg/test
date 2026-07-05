@@ -200,6 +200,30 @@ made **during the build**.
   trade-off; the stricter alternative (create the secret out-of-band and only reference
   its ARN) is noted for production.
 
+---
+
+## Phase 3 — CI/CD (2026-07-05)
+
+### D13 — Pipeline design: OIDC-only auth, root .gitlab-ci.yml, manual gates, mirror/deploy split
+- **Decided:** (a) **OIDC federation only** — zero stored AWS credentials in GitLab; provider +
+  role in bootstrap (trust conditioned on `project_path:main-group763827/ahmad-demo-project`);
+  the entire SDK integration is two env vars (AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE).
+  (b) Role carries **AdministratorAccess for the assessment week** — CI runs the same authority
+  the human runs; production splits into plan-role (read+state), apply-role (scoped, behind an
+  approval environment), and app-deploy role (ECR push + ECS update only). (c) `.gitlab-ci.yml`
+  at the **repo root** (GitLab's zero-config default) instead of pipeline/ per the original
+  layout sketch. (d) **Infra flow:** fmt/validate/tfsec → plan artifact → **manual apply** that
+  consumes exactly the reviewed plan file (Continuous DELIVERY, not Deployment — the drilled
+  distinction, in docs verbatim) + `resource_group: dev` to serialize applies. (e) **App flow
+  split mirror/deploy:** mirror (manual, 13-way matrix: pull upstream → Trivy report → push
+  `:sha` + `:stable` to ECR) is separate from deploy (manual per-service force-new-deployment),
+  because until task definitions point at ECR, an ECS update would pointlessly restart
+  Docker-Hub images. Trivy is report-only until Phase 5 adds the blocking policy + allowlist.
+- **Why OIDC over CI-variable keys:** the day-1 key exposure is the argument — long-lived
+  secrets stored in a third party leak; federated passports live minutes and pin to the repo.
+- **Alternatives:** masked/protected CI variables with a least-privilege IAM user (the skill's
+  documented fallback if OIDC fights back — it didn't).
+
 ### D12 — Service Connect: explicit bare dns_name + server-before-client ordering
 - **Decided:** (a) every service's `client_alias` sets **`dns_name = <service name>` explicitly**
   — AWS defaults an omitted dnsName to `discoveryName.namespace` (e.g. `catalogue.sockshop`),

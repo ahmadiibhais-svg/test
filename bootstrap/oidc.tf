@@ -19,8 +19,12 @@ resource "aws_iam_openid_connect_provider" "gitlab" {
 
 # The role a passport-holder may wear. Border control lives in the conditions:
 #   aud  = the audience we mint tokens for
-#   sub  = ONLY this project, any ref (branch pipelines run the flows;
-#          the manual apply job is protected by the pipeline itself)
+#   sub  = ONLY this project, pinned by IMMUTABLE PROJECT ID (84090295), not path.
+# Why ID not path: GitLab refused to issue path-subject tokens because this
+# project's path had a prior life (deleted project) — paths are recyclable and a
+# recreated path would inherit path-pinned cloud trust. IDs can't be recycled.
+# Requires the project setting id_token_sub_claim_components =
+# ["project_id","ref_type","ref"] (set in GitLab, 2026-07-05).
 resource "aws_iam_role" "gitlab_ci" {
   name = "avertra-sockshop-gitlab-ci"
 
@@ -37,7 +41,7 @@ resource "aws_iam_role" "gitlab_ci" {
           "gitlab.com:aud" = "https://gitlab.com"
         }
         StringLike = {
-          "gitlab.com:sub" = "project_path:main-group763827/ahmad-demo-project:*"
+          "gitlab.com:sub" = "project_id:84090295:*"
         }
       }
     }]

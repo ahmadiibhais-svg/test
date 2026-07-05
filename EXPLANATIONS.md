@@ -23,6 +23,7 @@ New lessons get appended as the project advances.
 - [L16 — The deployment watch playbook (CLI + console, in dependency order)](#l16)
 - [L17 — The error chronicle: every failure, cause, fix, and lesson](#l17)
 - [L18 — The Saturday story (narrative retelling of L16+L17 — read this one first)](#l18)
+- [L19 — The Sunday story: passports, broken shells, and a pipeline that owns its lifecycle](#l19)
 - [Defense question bank](#defense-question-bank)
 
 ---
@@ -983,6 +984,70 @@ reproducible from the repo for ≈$1.50.
 
 ---
 
+<a name="l19"></a>
+## L19 — The Sunday story: passports, broken shells, and a pipeline that owns its lifecycle
+
+*Phases 3+4 in one day. Like L18, this is the narrative; the reference details live in
+DECISIONS D13/D14 and the pipeline file's comments.*
+
+**The morning opened with receipts.** The timed rebuild: **114 resources in 5m45s**, seed
+one minute more — the docs sentence is now a measured fact. And the D12 ordering fix
+passed its clean-room test: socks on the first probe, zero manual cycling. Saturday's
+worst bug, formally healed.
+
+**Then we built the passport office.** The day-one key incident got its answer: OIDC
+federation. GitLab mints a short-lived signed identity per job (the passport); an IAM
+provider entry trusts the issuer; a role's conditions check WHICH project the passport
+names (border control); STS trades it for ~1h credentials. Zero stored secrets anywhere.
+It's IRSA with GitLab as the cluster. And the first live test FAILED beautifully:
+GitLab refused to mint tokens because our project PATH had a prior life — paths are
+recyclable (delete a project, squat the path, inherit its cloud trust), so GitLab makes
+you pin trust to the immutable numeric project ID instead. **Names can be reused; IDs
+can't — bind trust to the thing that can't be recycled.** One setting (sub-claim
+components, API-only), one trust-policy edit, and tf-plan went green on a rented runner.
+
+**tfsec's yellow was a sequencing trophy:** its #1 finding — 13 MUTABLE ECR repos — is
+exactly the trade-off D8 documented, dated before the scanner ever ran. "Here's the
+finding; here's my decision record accepting it, with the production path." That order
+(decide, then get flagged, then point at the decision) is the whole game.
+
+**The mirror saga — three lessons in one job.** The first run died on the Alpine-packaged
+aws-cli (a Python tool) crashing against musl (`pyexpat symbol not found`) — with a DECOY
+second error ("not a TTY") caused by empty stdin. **Debug the FIRST error of a cascade.**
+The fix-attempt then 404'd: Amazon's documented S3 download paths for the ECR credential
+helper are dead, and its GitHub releases carry no binaries — while Alpine's own package
+repo had it all along (`apk add docker-credential-ecr-login`, a static Go binary immune
+to the musl mess). **Verify an artifact URL exists before shipping it — read-before-drink
+applies to links.** Bonus: the helper means no registry password ever touches a job log.
+And the Trivy harvest en route: carts alone = 39 CRITICAL in app.jar; mongo:3.4 scores
+LOW-ish only because ubuntu 16.04 is EOL and under-catalogued — **a low score on an EOL
+image is blindness, not cleanliness** (accepted-risk register, verbatim).
+
+**The finale: the pipeline deployed its own infrastructure change.** All 13 services
+flipped from Docker Hub to OUR ECR `:stable` — committed, planned by a runner, applied by
+a human pressing the manual gate INSIDE GitLab (Continuous Delivery, not Deployment).
+Zero-downtime was proven RETROACTIVELY: the ALB's metrics remember — the 5xx series over
+the roll window is an empty array while RequestCount shows traffic. **You don't need to
+have been watching; the metrics were.**
+
+**Phase 4 in one breath:** SNS topic + email (the subscription is MUTE until the
+confirmation link is clicked), a 7-widget dashboard (p50 next to p99 because the tail is
+the truth), five alarms with both alarm AND recovery actions, and a real test-fire via
+`set-alarm-state` — ALARM email, then the OK email as the state re-evaluated. An alarm
+you've never seen fire is a rumor.
+
+**And the day closed with Ahmad's own idea:** the nightly destroy as a pipeline button —
+manual + a typed `CONFIRM_DESTROY` variable (double lock), dev root only. The negative
+test ran first by accident (pressed without the variable → REFUSED — screenshot-grade
+guardrail evidence), plus the UI gotcha (the ▶ icon passes no variables; use the job page
+or Run-pipeline-with-variables). The concept underneath: **pipeline jobs are stateless
+executors — only the state owns the infrastructure**, which is why a button born today
+could destroy resources created before it existed. Same lesson, last form: the bill is a
+month-to-date DIARY while describe-* is a live INVENTORY — an EBS line with zero volumes
+just means something lived briefly earlier in the month (the EC2 credit-activity ghost).
+
+---
+
 ## Defense question bank
 
 1. Why does bootstrap keep local state while the main root uses S3 — and what breaks if
@@ -1020,3 +1085,15 @@ reproducible from the repo for ≈$1.50.
 22. What single command sequence tells you whether a Service Connect resolution failure
     is a snapshot-staleness problem? (compare client deployment createdAt vs server
     registration; L16 ladder)
+23. Your pipeline stores zero AWS credentials — walk one job's authentication from
+    id_tokens to STS to the S3 backend. (L19)
+24. GitLab refused to issue ID tokens for your project. Why, what attack does that
+    protection kill, and why did pinning to the project ID fix it? (L19)
+25. Prove the 13-service roll was zero-downtime — AFTER the fact, with nobody watching
+    at the time. (L19: the metrics remember)
+26. Why can a destroy job added to the pipeline TODAY tear down infrastructure created
+    days before the job existed? (L19: stateless executors, the diary owns everything)
+27. The bill shows an EBS charge; describe-volumes returns empty. Reconcile. (L19:
+    bill = month-to-date diary; API = live inventory)
+28. Trivy gave mongo:3.4 a low score. Why is that BAD news, not good? (L19: EOL
+    under-cataloguing)

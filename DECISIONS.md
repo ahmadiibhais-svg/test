@@ -224,6 +224,29 @@ made **during the build**.
 - **Alternatives:** masked/protected CI variables with a least-privilege IAM user (the skill's
   documented fallback if OIDC fights back — it didn't).
 
+---
+
+## Phase 4 + lifecycle ops (2026-07-05)
+
+### D14 — The nightly destroy as a double-locked pipeline button
+- **Decided:** `tf-destroy` is a pipeline job (Ahmad's idea): manual trigger AND a typed
+  variable (`CONFIRM_DESTROY=sockshop-dev`) or the job refuses; `resource_group: dev`
+  serializes against applies; dev root only — bootstrap is never pipeline-destroyed.
+- **Evidence collected:** the negative test ran first (button pressed without the variable
+  → job refused, screenshot-grade log); then the real run tore down all 122 resources from
+  a GitLab runner on passport credentials. The environment's whole lifecycle — plan, apply,
+  deploy, destroy — now happens through one audited pipeline.
+- **Gotcha recorded:** GitLab's ▶ icon runs a manual job IMMEDIATELY with no variable
+  prompt; to pass variables, open the job page form or "Run pipeline" with variables.
+- **Concept:** pipeline jobs are stateless executors; only the STATE owns the
+  infrastructure — a job created today can destroy resources created before it existed.
+- **Phase 3+4 acceptance evidence (2026-07-05):** rebuild-from-nothing timed **5m45s**
+  (+~1min seed); D12 ordering passed clean-room (socks on first probe, zero manual
+  cycling); OIDC end-to-end (tf-plan green on a runner, zero stored credentials); 13
+  services flipped to ECR `:stable` THROUGH the pipeline's manual apply with **zero 5xx**
+  across the roll window (retroactive proof via ALB metrics); monitoring live (dashboard
+  + 5 alarms); p99 alarm test-fired → ALARM + OK emails received.
+
 ### D12 — Service Connect: explicit bare dns_name + server-before-client ordering
 - **Decided:** (a) every service's `client_alias` sets **`dns_name = <service name>` explicitly**
   — AWS defaults an omitted dnsName to `discoveryName.namespace` (e.g. `catalogue.sockshop`),

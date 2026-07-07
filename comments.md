@@ -41,6 +41,20 @@ load-demo:
     REQUESTS: "10000"
 ```
 
+### load-stop — the off-switch (Ahmad's design call, 2026-07-07)
+> The symmetric twin of load-demo: finds any RUNNING user-sim task and stop-tasks it —
+> locust dies instantly, traffic ceases, the autoscaler walks capacity back to baseline
+> on its own schedule. load-demo stays safe to keep in the pipeline because it is
+> manual-only, finite (-r is a request BUDGET, self-terminating), and capped by the
+> scaler's max — but a fireable test deserves a stop button. Production note: real load
+> tests belong to a perf environment via a separate pipeline, never the prod deploy one.
+
+```yaml
+load-stop:
+  ...
+  - for T in $TASKS; do aws ecs stop-task ...
+```
+
 ---
 
 # Migrated comments — batch A (bootstrap/ + .gitignore)

@@ -219,6 +219,21 @@ load-demo:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
+load-stop:
+  stage: deploy
+  extends: .aws-auth
+  image:
+    name: amazon/aws-cli:2.22.0
+    entrypoint: [""]
+  script:
+    - TASKS=$(aws ecs list-tasks --cluster sockshop --family sockshop-loadtest --desired-status RUNNING --query "taskArns" --output text)
+    - if [ -z "$TASKS" ] || [ "$TASKS" = "None" ]; then echo "no user-sim running - nothing to stop"; exit 0; fi
+    - for T in $TASKS; do aws ecs stop-task --cluster sockshop --task "$T" --reason "load-demo stopped from pipeline" --query "task.taskArn" --output text; done
+    - echo "load stopped - the autoscaler will walk capacity back down after its quiet window"
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
 scan-gate-demo:
   stage: mirror
   image:

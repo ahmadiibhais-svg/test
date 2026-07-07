@@ -1,4 +1,3 @@
-# The module's return values — what later modules need to plug into this network.
 output "vpc_id" {
   description = "VPC id — security groups and the ALB need it."
   value       = aws_vpc.this.id

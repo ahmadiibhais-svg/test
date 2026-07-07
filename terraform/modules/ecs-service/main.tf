@@ -1,18 +1,9 @@
-# ecs-service module — the reusable heart, instantiated once per service (13x).
-# Mapping for K8s eyes: task definition = pod spec, service = Deployment,
-# Service Connect block = Service registration in DNS.
-
-# ------------------------------------------------------------------ logging
 #tfsec:ignore:aws-cloudwatch-log-group-customer-key -- accepted 2026-07-07: CMK for 7-day demo logs adds $1/mo + key policy per group for no threat-model gain; SSE default suffices
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/ecs/${var.project}/${var.name}"
   retention_in_days = var.log_retention_days
 }
 
-# ------------------------------------------------------- the two identities
-# EXECUTION role: used by the ECS PLATFORM before/around the container —
-# pull image, write logs, (Phase 2) fetch secrets to inject.
-# K8s analog: the kubelet's credentials. Pull/log failures point HERE.
 resource "aws_iam_role" "execution" {
   name = "${var.project}-${var.name}-execution"
 
@@ -31,10 +22,6 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Phase-2 extension: services that inject secrets need their EXECUTION role
-# (injection is a platform job — L14/D10) allowed to read EXACTLY those
-# parameters, nothing wider. count 0/1 = the conditional-resource pattern:
-# services without secrets don't even get the policy object.
 resource "aws_iam_role_policy" "secrets_access" {
   count = length(var.secrets) > 0 ? 1 : 0
 
@@ -51,10 +38,6 @@ resource "aws_iam_role_policy" "secrets_access" {
   })
 }
 
-# TASK role: assumed by the APPLICATION CODE for AWS API calls at runtime.
-# K8s analog: the pod's ServiceAccount. Deliberately EMPTY — our apps make no
-# AWS calls, so their runtime identity has no permissions (least privilege).
-# Runtime AccessDenied in app logs would point HERE.
 resource "aws_iam_role" "task" {
   name = "${var.project}-${var.name}-task"
 
@@ -68,21 +51,15 @@ resource "aws_iam_role" "task" {
   })
 }
 
-# ------------------------------------------------------------ the pod spec
 resource "aws_ecs_task_definition" "this" {
   family                   = "${var.project}-${var.name}"
   requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc" # each task gets its own ENI + private IP (pod-IPs)
+  network_mode             = "awsvpc"
   cpu                      = var.cpu
   memory                   = var.memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
-  # container_definitions is historically a JSON-string field: jsonencode turns
-  # clean HCL into that JSON. The for-expressions reshape our friendly maps into
-  # the list-of-objects the ECS API demands. merge() + the null-to-{} ternary
-  # includes entryPoint/command in the JSON ONLY when a caller sets them
-  # (catalogue's sh-wrapper); everyone else keeps the image defaults untouched.
   container_definitions = jsonencode([
     merge(
       {
@@ -91,7 +68,7 @@ resource "aws_ecs_task_definition" "this" {
         essential = true
 
         portMappings = [{
-          name          = var.name # port name — Service Connect points at this
+          name          = var.name
           containerPort = var.container_port
           protocol      = "tcp"
         }]
@@ -114,7 +91,6 @@ resource "aws_ecs_task_definition" "this" {
   ])
 }
 
-# ---------------------------------------------------------- the Deployment
 resource "aws_ecs_service" "this" {
   name            = var.name
   cluster         = var.cluster_id
@@ -122,56 +98,38 @@ resource "aws_ecs_service" "this" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
-  # ALB-attached services get 60s of grace before health checks can kill slow
-  # starters (front-end is a slow Node boot); everyone else needs none.
   health_check_grace_period_seconds = var.target_group_arn == null ? null : 60
 
   network_configuration {
     subnets          = var.subnet_ids
     security_groups  = var.security_group_ids
-    assign_public_ip = false # locked: tasks are unroutable from outside; pulls go via NAT
+    assign_public_ip = false
   }
 
-  # Registers var.name in the sockshop namespace — front-end reaching
-  # http://catalogue/ resolves through this. Enabling it also makes this task a
-  # Service Connect CLIENT (needed to resolve others).
   service_connect_configuration {
     enabled   = true
     namespace = var.namespace_arn
 
     service {
-      port_name      = var.name # must match the portMapping name above
+      port_name      = var.name
       discovery_name = var.name
 
       client_alias {
-        # dns_name MUST be explicit: AWS defaults an omitted dnsName to
-        # "discoveryName.namespace" (catalogue.sockshop) — but the images dial
-        # BARE hostnames (catalogue). Cost of the default: ENOTFOUND everywhere.
-        # (Debugging story of 2026-07-04, D12.)
         dns_name = var.name
-        port     = var.container_port # the port callers dial
+        port     = var.container_port
       }
     }
   }
 
-  # The rollback story: if new tasks keep failing to start or go unhealthy
-  # during a deploy, ECS halts the rollout and reverts to the last working
-  # revision automatically. (Production upgrade path: CodeDeploy blue/green.)
   deployment_circuit_breaker {
     enable   = true
     rollback = true
   }
 
-  # Phase 5: the autoscaler owns the replica count at RUNTIME. Without this,
-  # every terraform apply would fight the autoscaler back down to desired_count
-  # (the K8s classic: HPA vs a hardcoded replicas field in the manifest).
-  # Trade-off: desired_count is now creation-time-only from Terraform's side.
   lifecycle {
     ignore_changes = [desired_count]
   }
 
-  # dynamic = render this nested block 0..N times; here 0 or 1: only front-end
-  # passes a target group; the other 12 instantiations render no block at all.
   dynamic "load_balancer" {
     for_each = var.target_group_arn == null ? [] : [var.target_group_arn]
 

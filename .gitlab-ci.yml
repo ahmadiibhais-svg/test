@@ -1,8 +1,3 @@
-# Avertra Sock Shop — two flows in one pipeline (D13):
-#   INFRA: fmt/validate/tfsec -> plan (artifact) -> MANUAL apply   (Continuous Delivery, not Deployment)
-#   APP:   mirror upstream -> Trivy scan -> push :sha + :stable to ECR -> manual per-service deploy
-# Auth: OIDC only — zero stored AWS credentials (bootstrap/oidc.tf, D13).
-
 variables:
   AWS_DEFAULT_REGION: us-east-1
   ROLE_ARN: arn:aws:iam::448049810701:role/avertra-sockshop-gitlab-ci
@@ -17,9 +12,6 @@ stages:
   - deploy
   - destroy
 
-# The whole OIDC handshake: GitLab mints a signed job identity (the passport);
-# these two env vars make every AWS SDK (terraform, aws cli) trade it at STS
-# for ~1h credentials automatically. Nothing stored, nothing to rotate.
 .aws-auth:
   id_tokens:
     AWS_ID_TOKEN:
@@ -37,7 +29,6 @@ stages:
         - bootstrap/**/*
         - .gitlab-ci.yml
 
-# ---------------------------------------------------------------- INFRA FLOW
 tf-fmt:
   stage: validate
   extends: .infra-rules
@@ -55,11 +46,9 @@ tf-validate:
     entrypoint: [""]
   script:
     - cd "$TF_DIR"
-    - terraform init -backend=false -input=false # no AWS needed for a schema check
+    - terraform init -backend=false -input=false
     - terraform validate
 
-# Phase-5 hardened (D15): BLOCKING, both roots, zero unexplained findings —
-# every accepted risk is an inline #tfsec:ignore with a dated justification.
 tfsec:
   stage: validate
   extends: .infra-rules
@@ -70,12 +59,6 @@ tfsec:
     - tfsec ./bootstrap
     - tfsec ./terraform/envs/dev
 
-# Phase-5 stretch (D15): drift detection. Terraform reconciles only when RUN
-# (L4: "a reconciliation you schedule, not a controller loop") — this job IS the
-# schedule. plan -detailed-exitcode: 0 = reality matches the diary, 2 = DRIFT
-# (job fails -> notification), 1 = error. Runs on a pipeline schedule (create
-# under Build -> Pipeline schedules, e.g. nightly) or manually for demos.
-# Remediation is ALWAYS review + gated apply — never auto-revert.
 drift-check:
   stage: validate
   extends: .aws-auth
@@ -100,7 +83,7 @@ tf-plan:
     entrypoint: [""]
   script:
     - cd "$TF_DIR"
-    - terraform init -input=false # S3 backend auths via the OIDC env vars
+    - terraform init -input=false
     - terraform plan -input=false -out=plan.tfplan
     - terraform show -no-color plan.tfplan > plan.txt
   artifacts:
@@ -109,8 +92,6 @@ tf-plan:
       - $TF_DIR/plan.txt
     expire_in: 1 week
 
-# THE manual gate — Continuous Delivery, not Deployment: the pipeline makes the
-# release possible; a human makes it happen. Applies exactly the reviewed artifact.
 tf-apply:
   stage: apply
   extends: .aws-auth
@@ -123,7 +104,7 @@ tf-apply:
     - terraform apply -input=false plan.tfplan
   needs: [tf-plan]
   when: manual
-  resource_group: dev # serialize applies — one writer, like the state lock story
+  resource_group: dev
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       changes:
@@ -131,9 +112,6 @@ tf-apply:
         - bootstrap/**/*
         - .gitlab-ci.yml
 
-# ------------------------------------------------------------------ APP FLOW
-# Supply-chain story: upstream images are pulled ONCE, scanned, then served
-# from OUR registry under both an immutable :sha tag (audit) and :stable (D8).
 .service-matrix:
   parallel:
     matrix:
@@ -175,19 +153,9 @@ mirror:
     DOCKER_TLS_CERTDIR: ""
   script:
     - apk add --no-cache curl
-    # Trivy binary (scan the upstream BEFORE it enters our registry)
     - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
     - docker pull "$UPSTREAM"
-    # Phase-5 policy (D15): legacy pinned images scan as a RISK MANIFEST
-    # (report-only — their CVE sets are the documented accepted register in
-    # .trivyignore); the scan-gate job below proves CRITICAL-blocking for
-    # anything new.
     - trivy image --severity HIGH,CRITICAL --exit-code 0 "$UPSTREAM"
-    # ECR auth WITHOUT aws-cli: Amazon's Go credential helper, from Alpine's own
-    # package repo (the apk aws-cli broke on musl/pyexpat; Amazon's S3 download
-    # paths are dead; GitHub releases ship no binaries — Alpine packages it).
-    # Docker invokes the helper automatically; it consumes the same OIDC env
-    # vars; no registry password ever touches stdout or the job log.
     - apk add --no-cache docker-credential-ecr-login
     - mkdir -p ~/.docker
     - echo "{\"credHelpers\":{\"$ECR\":\"ecr-login\"}}" > ~/.docker/config.json
@@ -212,10 +180,6 @@ deploy:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
-# D15 acceptance evidence: the blocking gate, demonstrated. Scans a known-dirty
-# image with --exit-code 1 and NO ignore file — this job is EXPECTED TO FAIL
-# (allow_failure so the pipeline survives): a red job here is the screenshot
-# that proves a CRITICAL vuln blocks promotion for non-legacy images.
 scan-gate-demo:
   stage: mirror
   image:
@@ -228,10 +192,6 @@ scan-gate-demo:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
-# The nightly cost ritual as a pipeline button (D14). Destroys the DEV root only —
-# bootstrap (state bucket, ECR, budget, OIDC) is never pipeline-destroyed.
-# TWO locks: the manual trigger AND a typed confirmation — when pressing play,
-# add variable CONFIRM_DESTROY = sockshop-dev, or the job refuses.
 tf-destroy:
   stage: destroy
   extends: .aws-auth
@@ -244,6 +204,6 @@ tf-destroy:
     - terraform init -input=false
     - terraform destroy -auto-approve -input=false
   when: manual
-  resource_group: dev # never concurrent with an apply
+  resource_group: dev
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

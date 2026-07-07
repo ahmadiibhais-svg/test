@@ -1,17 +1,8 @@
-# ALB module — the inbound door (L1): internet → ALB → front-end, nothing else.
-# Three parts map to K8s roles: aws_lb = the Ingress controller appliance,
-# aws_lb_target_group = EndpointSlice + readinessProbe, aws_lb_listener = the rule.
-
-# First link of the least-privilege SG chain (CLAUDE.md):
-#   internet --80--> alb-sg --8079--> frontend-sg --> backend-sg --> data/rds-sg
-# SGs are STATEFUL (replies auto-allowed; rules describe who may INITIATE) and can
-# name other SGs as source — identity-based, like a NetworkPolicy podSelector.
 resource "aws_security_group" "alb" {
   name        = "${var.name}-alb-sg"
   description = "ALB: HTTP from the internet"
   vpc_id      = var.vpc_id
 
-  # The ONE place "from anywhere" is correct: this is the public front door.
   #tfsec:ignore:aws-ec2-no-public-ingress-sgr -- accepted 2026-07-07: a public storefront's ALB admits the internet BY DESIGN (D11: the only 0.0.0.0/0 ingress in the system)
   ingress {
     description = "HTTP from the internet"
@@ -21,8 +12,6 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Chain is enforced on ingress (the initiating direction); egress stays open —
-  # standard pattern, keeps rules readable as "who may start a conversation".
   #tfsec:ignore:aws-ec2-no-public-egress-sgr -- accepted 2026-07-07: chain-on-ingress design (D11); egress restriction adds no protection when ingress is identity-pinned
   egress {
     description = "All outbound"
@@ -39,12 +28,10 @@ resource "aws_security_group" "alb" {
 resource "aws_lb" "this" {
   name               = "${var.name}-alb"
   load_balancer_type = "application"
-  internal           = false # public-facing — the only public entry to the app
+  internal           = false
   security_groups    = [aws_security_group.alb.id]
-  subnets            = var.public_subnet_ids # >= 2 AZs required by ALBs
+  subnets            = var.public_subnet_ids
 
-  # Real fix from the tfsec sweep (not an ignore): malformed-header requests
-  # are dropped at the door instead of reaching Node.
   drop_invalid_header_fields = true
 
   tags = { Name = "${var.name}-alb" }
@@ -56,15 +43,10 @@ resource "aws_lb_target_group" "front_end" {
   port     = var.target_port
   protocol = "HTTP"
 
-  # Fargate/awsvpc gives every task its own ENI + private IP (pod-IPs, literally),
-  # so the ALB targets IPs. "instance" is the NodePort-era pattern — no instances here.
   target_type = "ip"
 
-  # Connection draining: stop NEW traffic instantly on removal, give in-flight
-  # requests 30s to finish (default 300s = pointlessly slow rollouts for a demo).
   deregistration_delay = 30
 
-  # The readinessProbe, ALB edition: fail 3x -> pulled from rotation.
   health_check {
     path                = var.health_check_path
     interval            = 30
@@ -77,8 +59,6 @@ resource "aws_lb_target_group" "front_end" {
   tags = { Name = "${var.name}-front-end-tg" }
 }
 
-# The Ingress rule: on :80, forward everything to the front-end group.
-# (HTTPS/ACM is a documented production upgrade, not built in the time box.)
 #tfsec:ignore:aws-elb-http-not-used -- accepted 2026-07-07: HTTPS needs a domain + ACM cert; documented as the FIRST production upgrade (docs: Production Scaling)
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn

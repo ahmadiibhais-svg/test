@@ -1,23 +1,14 @@
-# Monitoring module — Phase 4. The framing (docs sentence, Ahmad's APM line):
-# infra monitoring answers "is the box healthy"; the dashboard's p99 + 5xx
-# answer "is the APP healthy". Alarms notify the humans via SNS email.
-
-# ------------------------------------------------------------------ alerting
 #tfsec:ignore:aws-sns-enable-topic-encryption -- accepted 2026-07-07: encrypting with the default aws/sns key would SILENTLY BREAK the alarms (CloudWatch alarms cannot publish to topics encrypted with the AWS-managed key; a CMK with a key policy costs $1/mo + complexity for demo-scale alert text)
 resource "aws_sns_topic" "alerts" {
   name = "${var.project}-alerts"
 }
 
-# Email subscriptions start PENDING until the recipient clicks the link AWS
-# sends — an unconfirmed subscription silently receives nothing.
 resource "aws_sns_topic_subscription" "email" {
   topic_arn = aws_sns_topic.alerts.arn
   protocol  = "email"
   endpoint  = var.alert_email
 }
 
-# ------------------------------------------------------------------ dashboard
-# One JSON document; for-expressions fan the 13 services into per-line metrics.
 resource "aws_cloudwatch_dashboard" "main" {
   dashboard_name = "${var.project}-overview"
 
@@ -112,9 +103,6 @@ resource "aws_cloudwatch_dashboard" "main" {
   })
 }
 
-# ------------------------------------------------------------------- alarms
-# 5 tripwires; every one notifies (and resolves) via the same topic.
-
 resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
   alarm_name          = "${var.project}-alb-5xx"
   alarm_description   = "More than 5 target 5xx in 5 minutes — the app is failing users."
@@ -126,7 +114,7 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
   evaluation_periods  = 1
   threshold           = 5
   comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching" # no traffic = no news, not an incident
+  treat_missing_data  = "notBreaching"
 
   alarm_actions = [aws_sns_topic.alerts.arn]
   ok_actions    = [aws_sns_topic.alerts.arn]
@@ -138,7 +126,7 @@ resource "aws_cloudwatch_metric_alarm" "p99_latency" {
   namespace           = "AWS/ApplicationELB"
   metric_name         = "TargetResponseTime"
   dimensions          = { LoadBalancer = var.alb_arn_suffix }
-  extended_statistic  = "p99" # percentile stats use extended_statistic, not statistic
+  extended_statistic  = "p99"
   period              = 300
   evaluation_periods  = 1
   threshold           = var.p99_latency_threshold_seconds
@@ -192,9 +180,9 @@ resource "aws_cloudwatch_metric_alarm" "rds_storage" {
   statistic           = "Average"
   period              = 300
   evaluation_periods  = 1
-  threshold           = 2000000000 # bytes
+  threshold           = 2000000000
   comparison_operator = "LessThanThreshold"
-  treat_missing_data  = "breaching" # missing storage data IS alarming
+  treat_missing_data  = "breaching"
 
   alarm_actions = [aws_sns_topic.alerts.arn]
   ok_actions    = [aws_sns_topic.alerts.arn]

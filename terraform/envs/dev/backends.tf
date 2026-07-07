@@ -1,16 +1,7 @@
-# Backend tier — 7 services. Java services (carts/orders/shipping/queue-master)
-# get 0.5 vCPU / 1024 MB + JAVA_OPTS (from compose; without it: slow boot + Zipkin
-# noise). Go services (catalogue/payment/user) run on the 0.25/512 default.
-# All wear backend-sg; Service Connect names match SERVICES.md exactly.
-
 locals {
   java_opts = "-Xms64m -Xmx128m -XX:+UseG1GC -Djava.security.egd=file:/dev/urandom -Dspring.zipkin.enabled=false"
 }
 
-# catalogue — the one service with a secret AND a launch wrapper (review catch #2):
-# its binary reads the DSN only as a -DSN flag and ECS does no $(VAR) substitution
-# in command, so: SSM injects env DSN (D10) -> sh -c turns it into the flag at
-# launch. Plaintext DSN never appears in the task definition or console.
 module "catalogue" {
   source = "../../modules/ecs-service"
 
@@ -19,11 +10,11 @@ module "catalogue" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/catalogue:stable" # Phase-3 flip (was weaveworksdemos/catalogue:0.3.5)
+  image          = "${local.ecr}/catalogue:stable"
   container_port = 80
 
   container_entrypoint = ["sh", "-c"]
-  container_command    = ["exec /app -port=80 -DSN=\"$DSN\""] # $DSN expands IN the container
+  container_command    = ["exec /app -port=80 -DSN=\"$DSN\""]
 
   secrets = {
     DSN = module.rds.dsn_parameter_arn
@@ -36,18 +27,18 @@ module "catalogue" {
 module "user" {
   source = "../../modules/ecs-service"
 
-  depends_on = [module.user_db] # D12 ordering
+  depends_on = [module.user_db]
 
   name          = "user"
   cluster_id    = module.ecs_cluster.cluster_id
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/user:stable" # Phase-3 flip (was weaveworksdemos/user:0.4.4, D6)
+  image          = "${local.ecr}/user:stable"
   container_port = 80
 
   environment = {
-    MONGO_HOST = "user-db:27017" # D6: explicit env name from compose
+    MONGO_HOST = "user-db:27017"
   }
 
   subnet_ids         = module.network.private_subnet_ids
@@ -62,7 +53,7 @@ module "payment" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/payment:stable" # Phase-3 flip (was weaveworksdemos/payment:0.4.3)
+  image          = "${local.ecr}/payment:stable"
   container_port = 80
 
   subnet_ids         = module.network.private_subnet_ids
@@ -72,17 +63,17 @@ module "payment" {
 module "carts" {
   source = "../../modules/ecs-service"
 
-  depends_on = [module.carts_db] # D12 ordering
+  depends_on = [module.carts_db]
 
   name          = "carts"
   cluster_id    = module.ecs_cluster.cluster_id
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/carts:stable" # Phase-3 flip (was weaveworksdemos/carts:0.4.8)
+  image          = "${local.ecr}/carts:stable"
   container_port = 80
 
-  cpu    = 512 # Java floor (CLAUDE.md sizing)
+  cpu    = 512
   memory = 1024
 
   environment = {
@@ -96,7 +87,6 @@ module "carts" {
 module "orders" {
   source = "../../modules/ecs-service"
 
-  # D12 ordering: orders calls carts/user/payment/shipping — create them first.
   depends_on = [
     module.carts,
     module.user,
@@ -109,7 +99,7 @@ module "orders" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/orders:stable" # Phase-3 flip (was weaveworksdemos/orders:0.4.7)
+  image          = "${local.ecr}/orders:stable"
   container_port = 80
 
   cpu    = 512
@@ -126,14 +116,14 @@ module "orders" {
 module "shipping" {
   source = "../../modules/ecs-service"
 
-  depends_on = [module.rabbitmq] # D12 ordering
+  depends_on = [module.rabbitmq]
 
   name          = "shipping"
   cluster_id    = module.ecs_cluster.cluster_id
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/shipping:stable" # Phase-3 flip (was weaveworksdemos/shipping:0.4.8)
+  image          = "${local.ecr}/shipping:stable"
   container_port = 80
 
   cpu    = 512
@@ -147,19 +137,17 @@ module "shipping" {
   security_group_ids = [aws_security_group.backend.id]
 }
 
-# queue-master: compose mounts docker.sock — NOT replicated on Fargate (impossible
-# and unneeded for the demo; documented trade-off in SERVICES.md).
 module "queue_master" {
   source = "../../modules/ecs-service"
 
-  depends_on = [module.rabbitmq] # D12 ordering
+  depends_on = [module.rabbitmq]
 
   name          = "queue-master"
   cluster_id    = module.ecs_cluster.cluster_id
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/queue-master:stable" # Phase-3 flip (was weaveworksdemos/queue-master:0.3.1)
+  image          = "${local.ecr}/queue-master:stable"
   container_port = 80
 
   cpu    = 512

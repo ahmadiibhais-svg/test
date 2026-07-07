@@ -1,8 +1,3 @@
-# Data tier — 5 services, all ephemeral by design (documented trade-off:
-# prod = DocumentDB/Atlas for the mongos, Amazon MQ for rabbit, ElastiCache for
-# redis). user-db re-seeds itself on every start; carts/orders data is demo-
-# disposable. Service Connect names MUST match SERVICES.md exactly.
-
 module "rabbitmq" {
   source = "../../modules/ecs-service"
 
@@ -11,7 +6,7 @@ module "rabbitmq" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/rabbitmq:stable" # Phase-3 flip (was rabbitmq:3.6.8; plain, not -management — SERVICES.md)
+  image          = "${local.ecr}/rabbitmq:stable"
   container_port = 5672
 
   subnet_ids         = module.network.private_subnet_ids
@@ -26,7 +21,7 @@ module "carts_db" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/carts-db:stable" # Phase-3 flip (was mongo:3.4, D5)
+  image          = "${local.ecr}/carts-db:stable"
   container_port = 27017
 
   subnet_ids         = module.network.private_subnet_ids
@@ -41,7 +36,7 @@ module "orders_db" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/orders-db:stable" # Phase-3 flip (was mongo:3.4, D5)
+  image          = "${local.ecr}/orders-db:stable"
   container_port = 27017
 
   subnet_ids         = module.network.private_subnet_ids
@@ -56,7 +51,7 @@ module "user_db" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/user-db:stable" # Phase-3 flip (was weaveworksdemos/user-db:0.4.0; seed users baked in)
+  image          = "${local.ecr}/user-db:stable"
   container_port = 27017
 
   subnet_ids         = module.network.private_subnet_ids
@@ -71,7 +66,7 @@ module "session_db" {
   namespace_arn = module.ecs_cluster.namespace_arn
   aws_region    = var.aws_region
 
-  image          = "${local.ecr}/session-db:stable" # Phase-3 flip (was redis:alpine, D4 — now pinned by OUR mirror, not a moving upstream tag)
+  image          = "${local.ecr}/session-db:stable"
   container_port = 6379
 
   subnet_ids         = module.network.private_subnet_ids

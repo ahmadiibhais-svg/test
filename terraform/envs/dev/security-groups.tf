@@ -1,6 +1,3 @@
-# Tier security groups — the least-privilege chain (CLAUDE.md). They live at the
-# root (not in a module) because they are exactly the wiring BETWEEN modules.
-# Chain link #2: only the ALB may talk to front-end, and only on its port.
 resource "aws_security_group" "frontend" {
   name        = "sockshop-frontend-sg"
   description = "front-end tasks: 8079 from the ALB only"
@@ -11,7 +8,7 @@ resource "aws_security_group" "frontend" {
     from_port       = 8079
     to_port         = 8079
     protocol        = "tcp"
-    security_groups = [module.alb.alb_sg_id] # SG-as-source: the NetworkPolicy podSelector move
+    security_groups = [module.alb.alb_sg_id]
   }
 
   #tfsec:ignore:aws-ec2-no-public-egress-sgr -- accepted 2026-07-07: chain-on-ingress design (D11)
@@ -26,9 +23,6 @@ resource "aws_security_group" "frontend" {
   tags = { Name = "sockshop-frontend-sg" }
 }
 
-# Chain link #3: backends accept 80 from front-end AND from each other.
-# self = true covers every backend->backend pair (orders -> carts/user/payment/
-# shipping) in one line — membership-based, like a NetworkPolicy selecting its own pods.
 resource "aws_security_group" "backend" {
   name        = "sockshop-backend-sg"
   description = "backend services: 80 from front-end and from each other"
@@ -62,7 +56,6 @@ resource "aws_security_group" "backend" {
   tags = { Name = "sockshop-backend-sg" }
 }
 
-# Chain link #4: the data tier accepts only its exact protocols from its exact clients.
 resource "aws_security_group" "data" {
   name        = "sockshop-data-sg"
   description = "data tier: mongo/amqp from backends; redis from front-end"
@@ -104,7 +97,6 @@ resource "aws_security_group" "data" {
   tags = { Name = "sockshop-data-sg" }
 }
 
-# Chain link #5: RDS accepts MySQL from backends only (catalogue is its one real client).
 resource "aws_security_group" "rds" {
   name        = "sockshop-rds-sg"
   description = "RDS MySQL: 3306 from backends only"

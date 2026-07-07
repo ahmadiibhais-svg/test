@@ -1,21 +1,6 @@
-# One-off RDS seeding task — the K8s Job analog: a task definition with no
-# service around it, executed on demand via `aws ecs run-task` (kubectl run
-# --restart=Never). Runs a MODERN mysql:8 client, which does three things:
-#   1. ALTER USER -> mysql_native_password  (the catalogue-driver compat fix;
-#      the server-level parameter is immutable on current RDS MySQL 8.0)
-#   2. import seed/dump.sql (versioned in-repo; GRANT line stripped — MySQL 8
-#      no longer auto-creates users on GRANT and the master already owns socksdb)
-#   3. SELECT COUNT(*) FROM sock  -> the verification, visible in the task's logs
-#
-# Secret hygiene: the password reaches the container ONLY as env MYSQL_PWD via
-# SSM injection (D10). The ALTER statement interpolates $MYSQL_PWD INSIDE the
-# container at runtime — never in the task definition, console, or logs.
-
 locals {
   seed_dump = file("${path.module}/seed/dump.sql")
 
-  # Bare $VAR (no braces) on purpose: Terraform only interpolates on ${...},
-  # so these pass through to the shell untouched.
   seed_script = <<-EOT
     set -e
     echo "1/3 aligning user auth plugin for the 2017 Go driver..."
@@ -53,8 +38,6 @@ resource "aws_iam_role_policy_attachment" "seed_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# The execution role fetches the password to inject it (D10: injection is an
-# EXECUTION-role job). Scoped to exactly one parameter.
 resource "aws_iam_role_policy" "seed_ssm" {
   name = "read-rds-password"
   role = aws_iam_role.seed_execution.id
@@ -80,7 +63,7 @@ resource "aws_ecs_task_definition" "seed" {
   container_definitions = jsonencode([
     {
       name      = "seed"
-      image     = "mysql:8.0" # official image's entrypoint execs any non-mysqld command
+      image     = "mysql:8.0"
       essential = true
       command   = ["sh", "-c", local.seed_script]
 

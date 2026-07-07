@@ -180,6 +180,45 @@ deploy:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
+seed:
+  stage: deploy
+  extends: .aws-auth
+  image:
+    name: amazon/aws-cli:2.22.0
+    entrypoint: [""]
+  script:
+    - SUBNETS=$(aws ec2 describe-subnets --filters "Name=tag:Name,Values=sockshop-private-a,sockshop-private-b" --query "Subnets[].SubnetId" --output text | tr '\t' ',')
+    - SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=sockshop-backend-sg --query "SecurityGroups[0].GroupId" --output text)
+    - TASK=$(aws ecs run-task --cluster sockshop --launch-type FARGATE --task-definition sockshop-seed --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=DISABLED}" --query "tasks[0].taskArn" --output text)
+    - echo "seed task $TASK"
+    - aws ecs wait tasks-stopped --cluster sockshop --tasks "$TASK"
+    - TID=${TASK##*/}
+    - aws logs get-log-events --log-group-name /ecs/sockshop/seed --log-stream-name "seed/seed/$TID" --query "events[].message" --output text | tee seed.log
+    - grep -q "SEED COMPLETE" seed.log
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+load-demo:
+  stage: deploy
+  extends: .aws-auth
+  image:
+    name: amazon/aws-cli:2.22.0
+    entrypoint: [""]
+  variables:
+    CLIENTS: "10"
+    REQUESTS: "10000"
+  script:
+    - ALB=$(aws elbv2 describe-load-balancers --names sockshop-alb --query "LoadBalancers[0].DNSName" --output text)
+    - SUBNETS=$(aws ec2 describe-subnets --filters "Name=tag:Name,Values=sockshop-private-a,sockshop-private-b" --query "Subnets[].SubnetId" --output text | tr '\t' ',')
+    - SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=sockshop-backend-sg --query "SecurityGroups[0].GroupId" --output text)
+    - TASK=$(aws ecs run-task --cluster sockshop --launch-type FARGATE --task-definition sockshop-loadtest --overrides "{\"containerOverrides\":[{\"name\":\"user-sim\",\"command\":[\"-r\",\"$REQUESTS\",\"-c\",\"$CLIENTS\",\"-h\",\"$ALB\"]}]}" --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG],assignPublicIp=DISABLED}" --query "tasks[0].taskArn" --output text)
+    - echo "user-sim fired at $ALB with $CLIENTS clients / $REQUESTS total requests -> $TASK"
+    - echo "now watch ECS front-end desired count and the sockshop-overview dashboard"
+  when: manual
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
 scan-gate-demo:
   stage: mirror
   image:

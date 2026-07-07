@@ -8,6 +8,41 @@ decision log) and EXPLANATIONS.md (the study lessons). Functional directives
 
 ---
 
+## .gitlab-ci.yml — seed & load-demo jobs (added 2026-07-07)
+
+### why the seed job exists and how it judges itself
+> Automates the post-rebuild seeding ritual: looks up the CURRENT private subnets and
+> backend-sg by tag/name (fresh IDs every rebuild), fires the sockshop-seed task
+> (K8s-Job pattern), waits for it to stop, then reads the task's own CloudWatch logs
+> back into the job log. The final grep IS the gate: no "SEED COMPLETE" in the logs,
+> no green job — a seed that can't prove it worked is treated as failed. Production
+> upgrade path: replace dump.sql with Liquibase changesets run by the same
+> pipeline-orchestrates/VPC-executes pattern (the runner can never reach the private
+> RDS directly).
+
+```yaml
+seed:
+  ...
+  - grep -q "SEED COMPLETE" seed.log
+```
+
+### why load-demo takes variables and doesn't wait
+> CLIENTS/REQUESTS are job variables so demo intensity is a form field at trigger
+> time (defaults = the proven siege: 10 clients, 10000 total requests, roughly 5-6
+> minutes). The job fires the user-sim task and exits green immediately — the
+> "result" of a load test is watched on the ECS service page and the CloudWatch
+> dashboard, not in a job log; holding a runner hostage for 6 minutes would prove
+> nothing.
+
+```yaml
+load-demo:
+  variables:
+    CLIENTS: "10"
+    REQUESTS: "10000"
+```
+
+---
+
 # Migrated comments — batch A (bootstrap/ + .gitignore)
 
 ## bootstrap/versions.tf

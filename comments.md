@@ -55,6 +55,19 @@ load-stop:
   - for T in $TASKS; do aws ecs stop-task ...
 ```
 
+### root outputs for the run-task ceremony (added 2026-07-08)
+> envs/dev re-exported only alb_dns_name and rds_endpoint; the subnet/SG facts a human
+> needs for `aws ecs run-task` lived on the network module but never reached the root's
+> shop window. Now `terraform output -raw backend_sg_id` etc. work. The PIPELINE jobs
+> deliberately keep tag-based live lookups instead (their image has aws-cli but no
+> terraform; mixing the two at runtime is the Alpine saga again) — two contracts, same
+> source code, and drift-check certifies they can't quietly diverge.
+
+```hcl
+output "private_subnet_ids" { value = module.network.private_subnet_ids }
+output "backend_sg_id"      { value = aws_security_group.backend.id }
+```
+
 ---
 
 # Migrated comments — batch A (bootstrap/ + .gitignore)

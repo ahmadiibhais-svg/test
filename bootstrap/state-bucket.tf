@@ -6,6 +6,7 @@
 
 data "aws_caller_identity" "current" {}
 
+#tfsec:ignore:aws-s3-enable-bucket-logging -- accepted 2026-07-07: access logging for a single-user state bucket adds a second bucket + lifecycle for audit data nobody reads at this scale; CloudTrail covers the API-level story
 resource "aws_s3_bucket" "tf_state" {
   # Bucket names are globally unique across ALL AWS accounts; suffixing the account
   # ID guarantees uniqueness (account IDs are not secret — they appear in every ARN).
@@ -29,6 +30,7 @@ resource "aws_s3_bucket_versioning" "tf_state" {
 
 # State files contain resource attributes (endpoints, ARNs, generated values) —
 # encrypt at rest with the free S3-managed key (SSE-S3 / AES256).
+#tfsec:ignore:aws-s3-encryption-customer-key -- accepted 2026-07-07: SSE-S3 encrypts at rest for free; a CMK protects against an attacker who ALREADY has s3:GetObject in a single-user account — negligible marginal gain (D10 records the related state-secret trade-off)
 resource "aws_s3_bucket_server_side_encryption_configuration" "tf_state" {
   bucket = aws_s3_bucket.tf_state.id
 

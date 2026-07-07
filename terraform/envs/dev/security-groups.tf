@@ -14,6 +14,7 @@ resource "aws_security_group" "frontend" {
     security_groups = [module.alb.alb_sg_id] # SG-as-source: the NetworkPolicy podSelector move
   }
 
+  #tfsec:ignore:aws-ec2-no-public-egress-sgr -- accepted 2026-07-07: chain-on-ingress design (D11)
   egress {
     description = "All outbound (chain is enforced on ingress)"
     from_port   = 0
@@ -49,6 +50,7 @@ resource "aws_security_group" "backend" {
     self        = true
   }
 
+  #tfsec:ignore:aws-ec2-no-public-egress-sgr -- accepted 2026-07-07: chain-on-ingress design (D11)
   egress {
     description = "All outbound"
     from_port   = 0
@@ -90,6 +92,7 @@ resource "aws_security_group" "data" {
     security_groups = [aws_security_group.frontend.id]
   }
 
+  #tfsec:ignore:aws-ec2-no-public-egress-sgr -- accepted 2026-07-07: chain-on-ingress design (D11)
   egress {
     description = "All outbound"
     from_port   = 0
@@ -115,6 +118,7 @@ resource "aws_security_group" "rds" {
     security_groups = [aws_security_group.backend.id]
   }
 
+  #tfsec:ignore:aws-ec2-no-public-egress-sgr -- accepted 2026-07-07: chain-on-ingress design (D11)
   egress {
     description = "All outbound"
     from_port   = 0

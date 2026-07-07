@@ -3,6 +3,7 @@
 # Service Connect block = Service registration in DNS.
 
 # ------------------------------------------------------------------ logging
+#tfsec:ignore:aws-cloudwatch-log-group-customer-key -- accepted 2026-07-07: CMK for 7-day demo logs adds $1/mo + key policy per group for no threat-model gain; SSE default suffices
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/ecs/${var.project}/${var.name}"
   retention_in_days = var.log_retention_days
@@ -159,6 +160,14 @@ resource "aws_ecs_service" "this" {
   deployment_circuit_breaker {
     enable   = true
     rollback = true
+  }
+
+  # Phase 5: the autoscaler owns the replica count at RUNTIME. Without this,
+  # every terraform apply would fight the autoscaler back down to desired_count
+  # (the K8s classic: HPA vs a hardcoded replicas field in the manifest).
+  # Trade-off: desired_count is now creation-time-only from Terraform's side.
+  lifecycle {
+    ignore_changes = [desired_count]
   }
 
   # dynamic = render this nested block 0..N times; here 0 or 1: only front-end

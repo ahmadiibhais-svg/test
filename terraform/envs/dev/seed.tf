@@ -29,6 +29,7 @@ locals {
   EOT
 }
 
+#tfsec:ignore:aws-cloudwatch-log-group-customer-key -- accepted 2026-07-07: same rationale as service log groups
 resource "aws_cloudwatch_log_group" "seed" {
   name              = "/ecs/sockshop/seed"
   retention_in_days = 7

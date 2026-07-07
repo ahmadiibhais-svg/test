@@ -226,6 +226,35 @@ made **during the build**.
 
 ---
 
+## Phase 5 — advanced features (2026-07-07)
+
+### D15 — Scanning with a triage policy; drift detection as a scheduled reconciler
+- **Auto-scaling (evidence):** front-end target-tracking (CPU@60, requests-per-target@100,
+  min 2 / max 5) jumped **2→5 in one proportional decision** under the user-sim siege
+  (10 clients / 10k requests ≈ 6 min); site 200 throughout; p99 alarm tripped and
+  recovered ORGANICALLY (metric-driven email pair). `ignore_changes = [desired_count]`
+  added BEFORE the scaler could fight Terraform. Load-test flags verified from the task's
+  own logs: `-r` is TOTAL REQUESTS, not a rate (first firing lasted 13s — a firecracker,
+  not a siege).
+- **tfsec: BLOCKING, both roots, zero unexplained findings.** All 56 findings triaged:
+  one real fix (`drop_invalid_header_fields` on the ALB), the rest inline
+  `#tfsec:ignore:<rule> -- accepted <date>: <reason>` citing decisions (the 13 MUTABLE
+  ECR findings cite D8, which predates the scanner's first run). Gotchas: tfsec only
+  scans ONE root per invocation (job scans bootstrap + envs/dev separately); rego-backed
+  checks (AVD-AWS-0177) only honor ignores on the offending LINE, not the resource header.
+- **Trivy policy (the register):** the 13 frozen legacy images scan as a RISK MANIFEST
+  (report-only; accepted CVE register in `.trivyignore` with mitigations + production
+  path; "a low score on an EOL image is blindness, not cleanliness"). Blocking for
+  anything new is PROVEN by the manual `scan-gate-demo` job (CRITICAL → exit 1 → red).
+- **Drift detection:** `drift-check` job — `terraform plan -detailed-exitcode` (0 clean /
+  2 drift → job fails → alert), runs on a pipeline schedule or manually. Demo arc
+  evidenced live: clean → console-cowboy tag injected via CLI → exit 2 with the foreign
+  tag in the plan → remediated → exit 0. Remediation is ALWAYS review + gated apply.
+  Honest caveat: exit 2 can't distinguish console drift from unapplied code — both are
+  gaps between code and reality, and both deserve the alert.
+
+---
+
 ## Phase 4 + lifecycle ops (2026-07-05)
 
 ### D14 — The nightly destroy as a double-locked pipeline button

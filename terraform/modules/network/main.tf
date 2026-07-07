@@ -3,6 +3,7 @@
 # door (NAT, single — documented cost trade-off), and the free S3 bypass.
 
 # ---------------------------------------------------------------- the sealed box
+#tfsec:ignore:aws-ec2-require-vpc-flow-logs-for-all-vpcs -- accepted 2026-07-07: flow logs cost CloudWatch ingestion for a demo VPC rebuilt nightly; production recommendation listed in docs
 resource "aws_vpc" "this" {
   cidr_block = var.vpc_cidr
 

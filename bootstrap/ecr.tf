@@ -2,6 +2,8 @@
 #
 # for_each over a set is Terraform's Helm-`range` analog: one resource instance per
 # name, individually addressable as aws_ecr_repository.services["front-end"].
+#tfsec:ignore:aws-ecr-enforce-immutable-repository -- accepted 2026-07-04 in D8, BEFORE this scanner ever ran: mutable :stable + immutable :sha tags is the assessment's deliberate trade-off; production path (IMMUTABLE + TF-driven tags) documented in D8 and walked through post-Phase-3
+#tfsec:ignore:aws-ecr-repository-customer-key -- accepted 2026-07-07: AWS-managed encryption at rest suffices for public upstream images; CMK adds cost/complexity with no confidentiality gain (the images are public)
 resource "aws_ecr_repository" "services" {
   for_each = toset(var.ecr_repositories)
 

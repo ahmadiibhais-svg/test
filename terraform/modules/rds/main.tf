@@ -34,6 +34,10 @@ resource "aws_db_subnet_group" "this" {
 # Actual fix: the SEED task (modern mysql:8 client, unaffected) runs
 # ALTER USER ... IDENTIFIED WITH mysql_native_password before catalogue ever
 # connects. Compatibility handled at the USER level, not the server level.
+#tfsec:ignore:aws-rds-specify-backup-retention -- accepted 2026-07-07: retention 0 is DELIBERATE (nightly destroy, D-notes below); prod >= 7 days in docs
+#tfsec:ignore:AVD-AWS-0177 -- accepted 2026-07-07: deletion protection (rego check aws0177) would break the nightly destroy ritual (D14)
+#tfsec:ignore:aws-rds-enable-iam-auth -- accepted 2026-07-07: catalogue's 2017 driver speaks password auth only (see auth-plugin note above)
+#tfsec:ignore:aws-rds-enable-performance-insights -- accepted 2026-07-07: demo-scale db.t4g.micro; PI listed as prod tuning aid in docs
 resource "aws_db_instance" "this" {
   identifier     = "${var.project}-catalogue-db"
   engine         = "mysql"
@@ -57,8 +61,9 @@ resource "aws_db_instance" "this" {
   # Destroyability decisions (nightly destroy is a feature, not neglect):
   skip_final_snapshot     = true # else destroy blocks demanding a snapshot name
   backup_retention_period = 0    # no automated backups in dev (prod: >= 7 days — docs)
-  deletion_protection     = false
-  apply_immediately       = true
+  #tfsec:ignore:AVD-AWS-0177 -- accepted 2026-07-07: deletion protection would break the nightly destroy ritual (D14)
+  deletion_protection = false
+  apply_immediately   = true
 }
 
 # D10, catalogue's half: the COMPLETE DSN as one SecureString, assembled here where

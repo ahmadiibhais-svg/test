@@ -1,0 +1,33 @@
+# .trivyignore — the accepted-risk register for image scanning (Phase 5, D15).
+#
+# POLICY: the 13 mirrored images are FROZEN 2017-2018 upstream pins (D5/D6/D8) —
+# their CVE sets are known, accepted, and documented here and in docs/. Scanning
+# them is still valuable as a MANIFEST of accepted risk (and Trivy under-reports
+# on EOL bases — a low score on an EOL image is blindness, not cleanliness).
+# Blocking applies to anything NEW: the pipeline's scan-gate job demonstrates
+# CRITICAL-blocking, and any future non-legacy image goes through it.
+#
+# Mitigations that make these acceptable FOR THIS DEMO (not for production):
+#   - private subnets, no public IPs, least-privilege SG chain (only the ALB
+#     faces the internet, and only front-end receives from it)
+#   - images served from OUR registry (no upstream drift after mirror)
+#   - ephemeral data tier; RDS is the only persistent store
+# Production path: current base images (rebuild the 2017 apps), DocumentDB/
+# Amazon MQ/ElastiCache managed replacements, WAF on the ALB. See docs.
+#
+# Harvested CRITICAL examples (mirror job logs, 2026-07-05) — carts:0.4.8:
+# os: alpine 3.4.6 (EOL)
+CVE-2017-8105
+CVE-2017-8287
+CVE-2016-9841
+CVE-2016-9843
+# app.jar (Spring/2017): jackson-databind deserialization family, logback —
+# 39 CRITICALs recorded in the pipeline artifacts; representative entries:
+CVE-2017-5929
+CVE-2017-15095
+CVE-2017-17485
+CVE-2017-7525
+CVE-2018-14718
+CVE-2018-14719
+CVE-2018-14720
+CVE-2018-14721

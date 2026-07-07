@@ -3,6 +3,7 @@
 # answer "is the APP healthy". Alarms notify the humans via SNS email.
 
 # ------------------------------------------------------------------ alerting
+#tfsec:ignore:aws-sns-enable-topic-encryption -- accepted 2026-07-07: encrypting with the default aws/sns key would SILENTLY BREAK the alarms (CloudWatch alarms cannot publish to topics encrypted with the AWS-managed key; a CMK with a key policy costs $1/mo + complexity for demo-scale alert text)
 resource "aws_sns_topic" "alerts" {
   name = "${var.project}-alerts"
 }

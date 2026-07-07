@@ -12,6 +12,7 @@ resource "aws_security_group" "alb" {
   vpc_id      = var.vpc_id
 
   # The ONE place "from anywhere" is correct: this is the public front door.
+  #tfsec:ignore:aws-ec2-no-public-ingress-sgr -- accepted 2026-07-07: a public storefront's ALB admits the internet BY DESIGN (D11: the only 0.0.0.0/0 ingress in the system)
   ingress {
     description = "HTTP from the internet"
     from_port   = 80
@@ -22,6 +23,7 @@ resource "aws_security_group" "alb" {
 
   # Chain is enforced on ingress (the initiating direction); egress stays open —
   # standard pattern, keeps rules readable as "who may start a conversation".
+  #tfsec:ignore:aws-ec2-no-public-egress-sgr -- accepted 2026-07-07: chain-on-ingress design (D11); egress restriction adds no protection when ingress is identity-pinned
   egress {
     description = "All outbound"
     from_port   = 0
@@ -33,12 +35,17 @@ resource "aws_security_group" "alb" {
   tags = { Name = "${var.name}-alb-sg" }
 }
 
+#tfsec:ignore:aws-elb-alb-not-public -- accepted 2026-07-07: a public storefront's LB is public; that is the requirement, not a finding
 resource "aws_lb" "this" {
   name               = "${var.name}-alb"
   load_balancer_type = "application"
   internal           = false # public-facing — the only public entry to the app
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.public_subnet_ids # >= 2 AZs required by ALBs
+
+  # Real fix from the tfsec sweep (not an ignore): malformed-header requests
+  # are dropped at the door instead of reaching Node.
+  drop_invalid_header_fields = true
 
   tags = { Name = "${var.name}-alb" }
 }
@@ -72,6 +79,7 @@ resource "aws_lb_target_group" "front_end" {
 
 # The Ingress rule: on :80, forward everything to the front-end group.
 # (HTTPS/ACM is a documented production upgrade, not built in the time box.)
+#tfsec:ignore:aws-elb-http-not-used -- accepted 2026-07-07: HTTPS needs a domain + ACM cert; documented as the FIRST production upgrade (docs: Production Scaling)
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn
   port              = 80

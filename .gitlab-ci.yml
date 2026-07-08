@@ -207,7 +207,7 @@ load-demo:
     entrypoint: [""]
   variables:
     CLIENTS: "10"
-    REQUESTS: "10000"
+    REQUESTS: "30000"
   script:
     - ALB=$(aws elbv2 describe-load-balancers --names sockshop-alb --query "LoadBalancers[0].DNSName" --output text)
     - SUBNETS=$(aws ec2 describe-subnets --filters "Name=tag:Name,Values=sockshop-private-a,sockshop-private-b" --query "Subnets[].SubnetId" --output text | tr '\t' ',')

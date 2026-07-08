@@ -81,7 +81,7 @@ Everything operational is a manual job on `main`; nothing mutating ever runs aut
 
 The environment is designed to be destroyed when idle — the NAT gateway and Fargate tasks bill by the hour whether busy or not. Because bootstrap survives every destroy, **rebuilds never repeat the mirror step**: images and state persist in ECR and S3.
 
-Rebuild = three button presses: `tf-apply` → `seed` → verify. Measured rebuild time from nothing to a serving, seeded storefront: **10 minutes** — that number is this project's repeatability proof.
+Rebuild = three button presses: `tf-apply` → `seed` → verify. Measured rebuild time from nothing to a serving, seeded storefront: **15 minutes** — that number is this project's repeatability proof.
 
 ## 8. Full teardown to zero
 

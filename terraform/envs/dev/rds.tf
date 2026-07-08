@@ -3,6 +3,8 @@ module "rds" {
 
   subnet_ids         = module.network.private_subnet_ids
   security_group_ids = [aws_security_group.rds.id]
+
+  multi_az = true
 }
 
 output "rds_endpoint" {
